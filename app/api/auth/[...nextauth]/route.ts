@@ -12,7 +12,7 @@ const scope = [
   "playlist-read-collaborative"
 ].join(" ");
 
-export const authOptions: AuthOptions = {
+const authOptions: AuthOptions = {
   providers: [
     SpotifyProvider({
       clientId: process.env.SPOTIFY_CLIENT_ID || "",
@@ -88,6 +88,5 @@ export const authOptions: AuthOptions = {
     signIn: "/",
   },
 };
-
 const handler = NextAuth(authOptions);
 export { handler as GET, handler as POST };
