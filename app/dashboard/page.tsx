@@ -1,28 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { MoodSelector } from "@/components/mood-selector";
+import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  CardFooter
-} from "@/components/ui/card";
-import { Loader2, Music, ExternalLink, Check, X } from "lucide-react";
-import Link from "next/link";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { MoodPlaylistSection } from "./sections/MoodPlaylistSection";
+import { CustomPlaylistSection } from "./sections/CustomPlaylistSection";
+import { PlaylistSidebar } from "./sections/PlaylistSidebar";
+import { Playlist, TempPlaylist, Track } from "./sections/types";
 import {
   getUserTopTracks,
   getRecommendations,
@@ -32,38 +16,9 @@ import {
   getAvailableGenres,
   generateMoodPlaylistWithAI,
   getSpotifyHeaders,
-  getMarketFromLanguage
+  getMarketFromLanguage,
+  generateCustomPromptPlaylist
 } from "@/lib/spotify";
-
-interface Track {
-  id: string;
-  name: string;
-  artist: string;
-  album: string;
-  image: string;
-}
-
-interface Playlist {
-  id: string;
-  name: string;
-  description: string;
-  externalUrl: string;
-  tracks: Track[];
-}
-
-// Languages available for selection
-const languages = [
-  { value: "any", label: "Any Language" },
-  { value: "en", label: "English" },
-  { value: "es", label: "Spanish" },
-  { value: "fr", label: "French" },
-  { value: "de", label: "German" },
-  { value: "it", label: "Italian" },
-  { value: "pt", label: "Portuguese" },
-  { value: "hi", label: "Hindi" },
-  { value: "ja", label: "Japanese" },
-  { value: "ko", label: "Korean" },
-];
 
 export default function Dashboard() {
   const { data: session, status } = useSession();
@@ -73,7 +28,9 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tempPlaylist, setTempPlaylist] = useState<{ id: string, tracks: string[]; } | null>(null);
+  const [tempPlaylist, setTempPlaylist] = useState<TempPlaylist | null>(null);
+  const [customPrompt, setCustomPrompt] = useState("");
+  const [customPlaylistName, setCustomPlaylistName] = useState("My Custom Playlist");
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -83,10 +40,62 @@ export default function Dashboard() {
 
   const handleMoodSelect = (mood: string) => {
     setSelectedMood(mood);
-    // Reset playlist and error when selecting a new mood
     setPlaylist(null);
     setError(null);
     setTempPlaylist(null);
+  };
+
+  const handleCreatePlaylist = async () => {
+    if (!customPrompt.trim()) {
+      setError("Please enter a prompt for your custom playlist");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      const result = await generateCustomPromptPlaylist(
+        customPrompt,
+        customPlaylistName,
+        15,
+        selectedLanguage
+      );
+
+      const tracksResponse = await fetch(`https://api.spotify.com/v1/playlists/${result.playlist.id}/tracks`, {
+        headers: await getSpotifyHeaders()
+      });
+
+      let playlistTracks: Track[] = [];
+
+      if (tracksResponse.ok) {
+        const tracksData = await tracksResponse.json();
+        playlistTracks = tracksData.items.map((item: any) => ({
+          id: item.track.id,
+          name: item.track.name,
+          artist: item.track.artists.map((artist: any) => artist.name).join(', '),
+          album: item.track.album.name,
+          image: item.track.album.images[0]?.url
+        }));
+      }
+
+      setPlaylist({
+        id: result.playlist.id,
+        name: result.playlist.name,
+        description: result.playlist.description || `Custom playlist based on: "${customPrompt}"`,
+        externalUrl: result.playlist.external_urls.spotify,
+        tracks: playlistTracks
+      });
+
+      setTempPlaylist({
+        id: result.playlist.id,
+        tracks: playlistTracks.map((track: Track) => track.id)
+      });
+    } catch (error: any) {
+      setError(error.message || "Something went wrong creating your custom playlist. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const generatePlaylist = async () => {
@@ -99,95 +108,62 @@ export default function Dashboard() {
       setLoading(true);
       setError(null);
 
-      // Get audio features for the selected mood
       const audioFeatures = moodToAudioFeatures[selectedMood as keyof typeof moodToAudioFeatures];
-
-      // Get market code from language
       const market = getMarketFromLanguage(selectedLanguage);
-      console.log(`Using market code for ${selectedLanguage}: ${market || 'none (global)'}`);
 
-      // Get user's top tracks to use as seeds
       let seedTracks: string[] = [];
       let seedGenres: string[] = [];
 
       try {
-        // Try to get available genres 
         try {
           const genresData = await getAvailableGenres();
-          console.log("Available genres:", genresData.genres);
-          seedGenres = genresData.genres.slice(0, 2); // Take 2 genres as backup
-        } catch (genresError) {
-          console.error("Error fetching genres:", genresError);
-          seedGenres = ["pop", "rock"]; // Fallback genres
+          seedGenres = genresData.genres.slice(0, 2);
+        } catch {
+          seedGenres = ["pop", "rock"];
         }
 
-        // Get top tracks
-        console.log("Fetching top tracks...");
         const topTracks = await getUserTopTracks("medium_term", 5);
         if (topTracks?.items?.length > 0) {
           seedTracks = topTracks.items.map((track: any) => track.id).slice(0, 3);
-          console.log(`Got ${seedTracks.length} seed tracks:`, seedTracks);
-        } else {
-          console.log("No top tracks found, using genre seeds");
         }
-      } catch (topTracksError) {
-        console.error("Error fetching top tracks:", topTracksError);
-      }
+      } catch { }
 
-      // Get recommendations based on tracks and mood
-      console.log("Getting recommendations...");
       const recommendationParams: any = {
         limit: 25,
         ...audioFeatures
       };
 
-      // Add seed parameters based on what we have
       if (seedTracks.length > 0) {
-        console.log("Using seed tracks:", seedTracks);
         recommendationParams.seedTracks = seedTracks;
       }
 
       if (seedGenres.length > 0 && seedTracks.length === 0) {
-        console.log("Using seed genres:", seedGenres);
         recommendationParams.seedGenres = seedGenres;
       }
 
-      // Add language filter if a specific language is selected
-      if (selectedLanguage !== "any") {
-        console.log(`Filtering for language: ${selectedLanguage} with market: ${market}`);
-        if (market) {
-          recommendationParams.market = market;
-        }
+      if (selectedLanguage !== "any" && market) {
+        recommendationParams.market = market;
       }
 
-      console.log("Recommendation params:", recommendationParams);
       const recommendations = await getRecommendations(recommendationParams);
 
       if (!recommendations?.tracks?.length) {
         throw new Error("No tracks were found for your mood. Please try a different mood or language.");
       }
 
-      // Create a temporary playlist for preview
-      console.log("Creating temporary playlist...");
       const playlistName = `My ${selectedMood.charAt(0).toUpperCase() + selectedMood.slice(1)} Playlist${selectedLanguage !== "any" ? ` (${selectedLanguage})` : ""}`;
       const playlistDescription = `A ${selectedMood} playlist generated with AI based on your listening history${selectedLanguage !== "any" ? ` in ${selectedLanguage}` : ""}`;
 
       const createdPlaylist = await createPlaylist(playlistName, playlistDescription);
-
-      // Add recommended tracks to the playlist
-      console.log("Adding tracks to temporary playlist...");
       const trackUris = recommendations.tracks.map((track: any) => track.uri);
       await addTracksToPlaylist(createdPlaylist.id, trackUris);
 
-      // Store temporary playlist info for later use (save or discard)
+      const trackIds = recommendations.tracks.map((track: any) => track.id);
       setTempPlaylist({
         id: createdPlaylist.id,
-        tracks: trackUris
+        tracks: trackIds
       });
 
-      console.log("Temporary playlist created successfully!");
-
-      // Set the playlist in state for preview
       setPlaylist({
         id: createdPlaylist.id,
         name: createdPlaylist.name,
@@ -202,7 +178,6 @@ export default function Dashboard() {
         }))
       });
     } catch (err: any) {
-      console.error("Error generating playlist:", err);
       setError(err.message || "Something went wrong generating your playlist. Please try again.");
     } finally {
       setLoading(false);
@@ -219,23 +194,18 @@ export default function Dashboard() {
       setLoading(true);
       setError(null);
 
-      // Generate playlist using AI with personalized tracks
       const playlistName = `My ${selectedMood.charAt(0).toUpperCase() + selectedMood.slice(1)} Vibes${selectedLanguage !== "any" ? ` (${selectedLanguage})` : ""}`;
       const result = await generateMoodPlaylistWithAI(selectedMood, playlistName, 15, selectedLanguage);
 
-      console.log("DEBUG: AI Playlist created:", result);
-
-      // Store temporary playlist info for later
+      const trackIds = result.tracks.map((track: any) => track.id);
       setTempPlaylist({
         id: result.playlist.id,
-        tracks: result.tracks || []
+        tracks: trackIds
       });
 
-      // Fetch tracks for the playlist
-      let playlistTracks: Track[] = [];
+      let playlistTracks: any[] = [];
 
       if (result.fallback) {
-        // For fallback case, we already have the tracks from getAIMoodRecommendations
         const aiFallbackResponse = await fetch(`https://api.spotify.com/v1/playlists/${result.playlist.id}`, {
           headers: await getSpotifyHeaders()
         });
@@ -251,7 +221,6 @@ export default function Dashboard() {
           }));
         }
       } else {
-        // For regular case, we need to retrieve tracks
         const tracksResponse = await fetch(`https://api.spotify.com/v1/playlists/${result.playlist.id}/tracks`, {
           headers: await getSpotifyHeaders()
         });
@@ -268,7 +237,6 @@ export default function Dashboard() {
         }
       }
 
-      // Set the playlist in state
       setPlaylist({
         id: result.playlist.id,
         name: result.playlist.name,
@@ -288,75 +256,106 @@ export default function Dashboard() {
   // Function to save the playlist permanently
   const savePlaylist = async () => {
     try {
-      // No API action needed as playlist is already saved in Spotify
-      // Just reset the temporary playlist state
-      setTempPlaylist(null);
+      setLoading(true);
+
+      // Check if this is a preview that needs to be created on Spotify
+      if (tempPlaylist?.id === "preview" && playlist) {
+        console.log("Creating playlist on Spotify from preview");
+
+        // Create a real playlist on Spotify
+        const realPlaylist = await createPlaylist(
+          playlist.name,
+          playlist.description
+        );
+
+        // Search for and add the tracks
+        const trackUris: string[] = [];
+
+        // For each track in our preview, search Spotify and add the real tracks
+        for (const track of playlist.tracks) {
+          try {
+            const searchQuery = `${track.name} artist:${track.artist.split('ft.')[0].trim()}`;
+            const searchResponse = await fetch(
+              `https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=1`,
+              { headers: await getSpotifyHeaders() }
+            );
+
+            if (searchResponse.ok) {
+              const searchData = await searchResponse.json();
+              if (searchData.tracks.items.length > 0) {
+                trackUris.push(searchData.tracks.items[0].uri);
+              }
+            }
+          } catch (error) {
+            console.error(`Error searching for track: ${track.name}`, error);
+          }
+        }
+
+        if (trackUris.length > 0) {
+          await addTracksToPlaylist(realPlaylist.id, trackUris);
+
+          // Update the playlist in state with the real one
+          setPlaylist({
+            ...playlist,
+            id: realPlaylist.id,
+            externalUrl: realPlaylist.external_urls.spotify
+          });
+
+          // Reset temporary playlist state
+          setTempPlaylist(null);
+        } else {
+          throw new Error("Could not find any matching tracks on Spotify");
+        }
+      } else if (tempPlaylist) {
+        // Regular case: playlist already exists on Spotify
+        setTempPlaylist(null);
+      }
 
       // Show success message
-      setError("Playlist saved successfully!");
+      setError("Playlist saved successfully to your Spotify account!");
       setTimeout(() => setError(null), 3000);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error saving playlist:", err);
-      // Still clear the tempPlaylist state
-      setTempPlaylist(null);
-      setError("Error occurred, but playlist saved");
+      setError(err.message || "Error occurred while saving playlist. Please try again.");
       setTimeout(() => setError(null), 3000);
+    } finally {
+      setLoading(false);
     }
   };
 
   // Function to discard the generated playlist
   const discardPlaylist = async () => {
     try {
-      if (tempPlaylist?.id) {
+      // For preview playlists, we don't need to call Spotify API
+      if (tempPlaylist?.id === "preview") {
+        console.log("Discarding preview playlist - no API call needed");
+      } else if (tempPlaylist?.id) {
+      // Only try to remove from Spotify if it's a real playlist
         try {
-          console.log("Attempting to discard playlist:", tempPlaylist.id);
-
-          // Get headers with fresh session
+          console.log("Discarding playlist from Spotify:", tempPlaylist.id);
           const headers = await getSpotifyHeaders();
-          console.log("Headers obtained successfully");
 
-          // First try with explicit CORS mode
-          try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+          const response = await fetch(`https://api.spotify.com/v1/playlists/${tempPlaylist.id}/followers`, {
+            method: 'DELETE',
+            headers,
+            mode: 'cors',
+            credentials: 'include'
+          });
 
-            console.log("Making DELETE request to Spotify API...");
-            const response = await fetch(`https://api.spotify.com/v1/playlists/${tempPlaylist.id}/followers`, {
-              method: 'DELETE',
-              headers,
-              signal: controller.signal,
-              mode: 'cors',
-              credentials: 'include'
-            });
-
-            clearTimeout(timeoutId);
-
-            if (response.ok) {
-              console.log("Playlist discard request successful");
-            } else {
-              console.warn(`Spotify returned an error: ${response.status} ${response.statusText}`);
-              // Continue anyway
-            }
-          } catch (fetchError) {
-            console.error("Error in DELETE request:", fetchError);
-            // Continue and clean up UI state
+          if (!response.ok) {
+            console.warn(`Spotify returned an error: ${response.status} ${response.statusText}`);
           }
         } catch (apiError: any) {
-          // Log the error but continue to clean up the UI
           console.error("Error calling Spotify API:", apiError);
-          if (apiError.name === 'AbortError') {
-            console.error("Request timed out - connection issue");
-          }
-          // Continue execution to clean up UI
         }
       }
 
       // Reset states regardless of API success/failure
       setTempPlaylist(null);
       setPlaylist(null);
-      setError("Playlist removed from view");
+      setError("Playlist discarded");
       setTimeout(() => setError(null), 3000);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error in discardPlaylist function:", err);
       setError("Error occurred, but playlist removed from view");
       // Still reset the state to improve user experience
@@ -368,165 +367,65 @@ export default function Dashboard() {
 
   if (status === "loading") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-neutral-900 to-black">
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-neutral-900 via-gray-900 to-slate-900">
         <div className="text-xl text-white">Loading...</div>
       </div>
     );
   }
 
+  // Languages available for selection - needed for custom playlist generation
+  const languages = [
+    { value: "any", label: "Any Language" },
+    { value: "en", label: "English" },
+    { value: "es", label: "Spanish" },
+    { value: "fr", label: "French" },
+    { value: "de", label: "German" },
+    { value: "it", label: "Italian" },
+    { value: "pt", label: "Portuguese" },
+    { value: "hi", label: "Hindi" },
+    { value: "ja", label: "Japanese" },
+    { value: "ko", label: "Korean" },
+    { value: "zh", label: "Chinese" },
+    { value: "ru", label: "Russian" },
+    { value: "ar", label: "Arabic" },
+    { value: "tr", label: "Turkish" },
+  ];
+
   return (
-    <main className="min-h-screen bg-gradient-to-b from-neutral-900 to-black p-6">
-      <div className="flex flex-col lg:flex-row gap-6 h-full">
+    <main className="min-h-screen bg-gradient-to-b from-black via-slate-950 to-black p-6">
+      <div className="flex flex-col lg:flex-row gap-8 h-full max-w-[1600px] mx-auto">
         <div className="flex-1">
-          <div className="mb-12 text-center">
-            <h1 className="mb-4 text-4xl font-bold text-white">Choose Your Mood</h1>
-            <p className="text-lg text-gray-400">
-              Select a mood and let AI create the perfect playlist for you
-            </p>
-          </div>
+          {/* Mood Playlist Section */}
+          <MoodPlaylistSection
+            selectedMood={selectedMood}
+            selectedLanguage={selectedLanguage}
+            loading={loading}
+            error={error}
+            onSelectMood={handleMoodSelect}
+            onSelectLanguage={setSelectedLanguage}
+            onGeneratePlaylist={generatePlaylist}
+            onGenerateAIPlaylist={generateAIPlaylist}
+          />
 
-          <MoodSelector selectedMood={selectedMood} onSelectMood={handleMoodSelect} />
-
-          {/* Language Selector */}
-          <div className="mt-6 flex justify-center">
-            <div className="w-full max-w-xs">
-              <label className="block text-sm font-medium text-gray-400 mb-2">
-                Preferred Language
-              </label>
-              <Select
-                value={selectedLanguage}
-                onValueChange={setSelectedLanguage}
-              >
-                <SelectTrigger className={`w-full ${selectedLanguage !== "any" ? "border-green-400 bg-green-900/20" : ""}`}>
-                  <SelectValue placeholder="Select Language" />
-                </SelectTrigger>
-                <SelectContent>
-                  {languages.map((language) => (
-                    <SelectItem key={language.value} value={language.value}>
-                      {language.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {selectedLanguage !== "any" && (
-                <p className="mt-2 text-xs text-green-400">
-                  Playlist will favor songs in {languages.find(l => l.value === selectedLanguage)?.label}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {error && (
-            <div className={`mt-6 rounded-md p-4 text-center ${error.includes("successfully") || error.includes("discarded") ? "bg-green-500/20 text-green-300" : "bg-red-500/20 text-red-300"}`}>
-              {error}
-            </div>
-          )}
-
-          <div className="mt-8 flex flex-col md:flex-row justify-center gap-4">
-            <Button
-              size="lg"
-              className="px-8 bg-green-600 hover:bg-green-700"
-              onClick={generatePlaylist}
-              disabled={loading || !selectedMood}
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating...
-                </>
-              ) : (
-                "Basic Playlist"
-              )}
-            </Button>
-
-            <Button
-              size="lg"
-              className="px-8 bg-purple-600 hover:bg-purple-700"
-              onClick={generateAIPlaylist}
-              disabled={loading || !selectedMood}
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating...
-                </>
-              ) : (
-                "AI Playlist"
-              )}
-            </Button>
-          </div>
+          {/* Custom Playlist Section */}
+          <CustomPlaylistSection
+            loading={loading}
+            customPrompt={customPrompt}
+            customPlaylistName={customPlaylistName}
+            onPromptChange={setCustomPrompt}
+            onPlaylistNameChange={setCustomPlaylistName}
+            onCreateCustomPlaylist={handleCreatePlaylist}
+          />
         </div>
 
         {/* Playlist Sidebar */}
-        <div className="lg:w-[400px]">
-          <div className="sticky top-6">
-            <Card className="bg-card/95 h-[calc(100vh-3rem)] overflow-y-auto">
-              {playlist ? (
-                <>
-                  <CardHeader>
-                    <CardTitle className="flex items-center">
-                      <Music className="mr-2 h-5 w-5" /> {playlist.name}
-                    </CardTitle>
-                    <CardDescription>{playlist.description}</CardDescription>
-                    <Link
-                      href={playlist.externalUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center mt-2 text-primary hover:text-primary/80"
-                    >
-                      Open in Spotify <ExternalLink className="ml-1 h-4 w-4" />
-                    </Link>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-1">
-                      {playlist.tracks.map((track) => (
-                        <div
-                          key={track.id}
-                          className="flex items-center gap-4 rounded-md p-2 hover:bg-accent/50"
-                        >
-                          {track.image && (
-                            <img
-                              src={track.image}
-                              alt={track.album}
-                              className="h-12 w-12 rounded-md object-cover"
-                            />
-                          )}
-                          <div className="overflow-hidden">
-                            <div className="font-medium truncate">{track.name}</div>
-                            <div className="text-sm text-muted-foreground truncate">{track.artist}</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                  <CardFooter className="flex justify-between pt-4 border-t">
-                    <Button
-                      onClick={savePlaylist}
-                      className="bg-green-600 hover:bg-green-700"
-                      disabled={!tempPlaylist}
-                    >
-                      <Check className="mr-2 h-4 w-4" /> Save Playlist
-                    </Button>
-                    <Button
-                      onClick={discardPlaylist}
-                      variant="outline"
-                      className="text-red-500 hover:text-red-600 hover:bg-red-100/10"
-                      disabled={!tempPlaylist}
-                    >
-                      <X className="mr-2 h-4 w-4" /> Discard
-                    </Button>
-                  </CardFooter>
-                </>
-              ) : (
-                  <div className="flex h-full flex-col items-center justify-center p-6 text-center">
-                    <Music className="h-12 w-12 text-muted-foreground mb-4" />
-                    <h3 className="text-xl font-medium mb-2">No Playlist Yet</h3>
-                    <p className="text-muted-foreground">
-                      You have not generated a playlist yet. Select a mood and click one of the generate buttons.
-                    </p>
-                </div>
-              )}
-            </Card>
-          </div>
-        </div>
+        <PlaylistSidebar
+          playlist={playlist}
+          tempPlaylist={tempPlaylist}
+          loading={loading}
+          onSavePlaylist={savePlaylist}
+          onDiscardPlaylist={discardPlaylist}
+        />
       </div>
     </main>
   );
