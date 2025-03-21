@@ -68,16 +68,16 @@ export function MoodPlaylistSection({
             <div className="mt-8 mb-12">
                 {/* Main Row Container - wrapping div */}
                 <div className="max-w-3xl mx-auto">
-                    <div className="mb-2 md:mb-0 md:ml-[68px]">
+                    {/* <div className="mb-2 md:mb-0 md:ml-[68px]">
                         <label className="block text-sm font-medium text-gray-300">
                             Preferred Language
                         </label>
-                    </div>
+                    </div> */}
 
                     {/* Control Row */}
                     <div className="flex flex-col md:flex-row justify-center gap-4">
                         {/* Language Selector */}
-                        <div className="w-full md:w-64 shrink-0">
+                        {/* <div className="w-full md:w-64 shrink-0">
                             <Select
                                 value={selectedLanguage}
                                 onValueChange={onSelectLanguage}
@@ -93,7 +93,7 @@ export function MoodPlaylistSection({
                                     ))}
                                 </SelectContent>
                             </Select>
-                        </div>
+                        </div> */}
 
                         {/* Buttons */}
                         <div className="flex flex-row gap-4 w-full md:flex-1">

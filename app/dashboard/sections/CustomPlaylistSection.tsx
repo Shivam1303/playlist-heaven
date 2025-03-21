@@ -24,7 +24,7 @@ export function CustomPlaylistSection({
     onPlaylistNameChange,
     onCreateCustomPlaylist
 }: CustomPlaylistSectionProps) {
-    const [isCustomPlaylistOpen, setIsCustomPlaylistOpen] = useState(true);
+    const [isCustomPlaylistOpen, setIsCustomPlaylistOpen] = useState(false);
 
     return (
         <div className="mt-4 mb-14 relative">

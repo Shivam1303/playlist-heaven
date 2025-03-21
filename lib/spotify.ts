@@ -88,44 +88,120 @@ export const getRecommendations = async ({
     targetValence,
     market
 }: RecommendationParams & { market?: string; }) => {
+    // Directly use the fallback method as the main recommendations API is deprecated
+    return await getRecommendationsFallback({
+        seedTracks,
+        seedArtists,
+        seedGenres,
+        limit,
+        targetEnergy,
+        targetDanceability,
+        targetValence,
+        market
+    });
+};
+
+// Fallback method using search API as an alternative to recommendations
+const getRecommendationsFallback = async ({
+    seedTracks = [],
+    seedArtists = [],
+    seedGenres = [],
+    limit = 50,
+    targetEnergy,
+    targetDanceability,
+    targetValence,
+    market
+}: RecommendationParams & { market?: string; }) => {
     const headers = await getSpotifyHeaders();
+    const tracksToFetch = Math.min(limit, 50);
+    let combinedTracks: any[] = [];
+    const marketParam = market ? `&market=${market}` : '';
 
     try {
-        const seedParams = [
-            ...(seedTracks.length > 0 ? [`seed_tracks=${seedTracks.slice(0, 5).join(',')}`] : []),
-            ...(seedArtists.length > 0 ? [`seed_artists=${seedArtists.slice(0, 5).join(',')}`] : []),
-            ...(seedGenres.length > 0 ? [`seed_genres=${seedGenres.slice(0, 5).join(',')}`] : [])
-        ].join('&');
+        // If we have seed tracks, use them to find similar tracks via search
+        if (seedTracks.length > 0) {
+            const seedTrackDetails = await Promise.all(
+                seedTracks.slice(0, 3).map(async (trackId) => {
+                    const trackResponse = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, { headers });
+                    if (trackResponse.ok) {
+                        const trackData = await trackResponse.json();
+                        return {
+                            name: trackData.name,
+                            artists: trackData.artists.map((a: any) => a.name)
+                        };
+                    }
+                    return null;
+                })
+            );
 
-        const targetParams = [
-            ...(targetEnergy !== undefined ? [`target_energy=${targetEnergy}`] : []),
-            ...(targetDanceability !== undefined ? [`target_danceability=${targetDanceability}`] : []),
-            ...(targetValence !== undefined ? [`target_valence=${targetValence}`] : [])
-        ].join('&');
+            const validTrackDetails = seedTrackDetails.filter(Boolean);
 
-        const marketParam = market ? `&market=${market}` : '';
+            for (const track of validTrackDetails) {
+                if (track) {
+                    // Search for similar tracks using track name and artist
+                    const searchQuery = `${track.name} ${track.artists[0]}`;
+                    const searchResponse = await fetch(
+                        `https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=${Math.ceil(tracksToFetch / validTrackDetails.length)}${marketParam}`,
+                        { headers }
+                    );
 
-        const url = `https://api.spotify.com/v1/recommendations?${seedParams}&${targetParams}&limit=${limit}${marketParam}`;
-
-        const response = await fetch(url, { headers });
-
-        if (!response.ok) {
-            throw new Error(`Failed to fetch recommendations: ${response.statusText}`);
+                    if (searchResponse.ok) {
+                        const searchData = await searchResponse.json();
+                        // Skip the first result as it's likely the seed track itself
+                        combinedTracks = [...combinedTracks, ...searchData.tracks.items.slice(1)];
+                    }
+                }
+            }
         }
 
-        const data = await response.json();
+        // If we have seed artists, get their top tracks
+        if (seedArtists.length > 0 && combinedTracks.length < tracksToFetch) {
+            for (const artistId of seedArtists.slice(0, 3)) {
+                const topTracksResponse = await fetch(
+                    `https://api.spotify.com/v1/artists/${artistId}/top-tracks?market=from_token`,
+                    { headers }
+                );
 
-        if (market) {
-            data.tracks = data.tracks.filter((track: any) => {
-                return track.available_markets?.includes(market);
-            });
+                if (topTracksResponse.ok) {
+                    const topTracksData = await topTracksResponse.json();
+                    combinedTracks = [...combinedTracks, ...topTracksData.tracks || []];
+                }
+            }
         }
+
+        // If we have seed genres, search for tracks in those genres
+        if (seedGenres.length > 0 && combinedTracks.length < tracksToFetch) {
+            for (const genre of seedGenres.slice(0, 3)) {
+                const genreSearchResponse = await fetch(
+                    `https://api.spotify.com/v1/search?q=genre:${encodeURIComponent(genre)}&type=track&limit=${Math.ceil(tracksToFetch / 3)}${marketParam}`,
+                    { headers }
+                );
+
+                if (genreSearchResponse.ok) {
+                    const genreSearchData = await genreSearchResponse.json();
+                    combinedTracks = [...combinedTracks, ...genreSearchData.tracks.items];
+                }
+            }
+        }
+
+        // Fallback to top tracks if we couldn't get enough tracks
+        if (combinedTracks.length < 5) {
+            const topTracksData = await getUserTopTracks("medium_term", tracksToFetch);
+            combinedTracks = [...combinedTracks, ...topTracksData.items];
+        }
+
+        // Remove duplicates and randomize order for variety
+        const uniqueTracks = Array.from(
+            new Map(combinedTracks.map((track: any) => [track.id, track])).values()
+        ).sort(() => 0.5 - Math.random()).slice(0, limit);
 
         return {
-            tracks: data.tracks,
-            seeds: data.seeds
+            tracks: uniqueTracks,
+            seeds: []
         };
     } catch (error) {
+        console.error("Error in recommendations fallback:", error);
+        // Final fallback is user's top tracks
         return getUserTopTracks("medium_term", limit);
     }
 };
@@ -164,18 +240,38 @@ export const createPlaylist = async (name: string, description = "") => {
 export const addTracksToPlaylist = async (playlistId: string, trackUris: string[]) => {
     const headers = await getSpotifyHeaders();
 
+    // Validate track URIs to ensure proper Spotify format (spotify:track:id)
+    const validTrackUris = trackUris.filter(uri => {
+        // Check if URI follows the spotify:track:BASE62ID format
+        return typeof uri === 'string' &&
+            uri.startsWith('spotify:track:') &&
+            uri.length > 14 &&
+            /^spotify:track:[a-zA-Z0-9]{22}$/.test(uri);
+    });
+
+    if (validTrackUris.length === 0) {
+        console.error("No valid track URIs found", { originalUris: trackUris });
+        throw new Error("No valid track URIs found to add to playlist");
+    }
+
+    if (validTrackUris.length < trackUris.length) {
+        console.warn(`Filtered out ${trackUris.length - validTrackUris.length} invalid track URIs`);
+    }
+
     const response = await fetch(
         `https://api.spotify.com/v1/playlists/${playlistId}/tracks`,
         {
             method: "POST",
             headers,
             body: JSON.stringify({
-                uris: trackUris,
+                uris: validTrackUris,
             }),
         }
     );
 
     if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Failed to add tracks to playlist:", errorData);
         throw new Error(`Failed to add tracks to playlist: ${response.statusText}`);
     }
 
@@ -561,7 +657,7 @@ export const generateMoodPlaylistWithAI = async (
 
         if (language !== "any") {
             const languageName = language.toUpperCase();
-            prompt += `All songs must be in the ${languageName} language. `;
+            prompt += `All songs you suggest much be in the ${languageName} language. `;
         }
 
         if (userTopTracks.length > 0 || userRecentTracks.length > 0) {
@@ -576,8 +672,8 @@ export const generateMoodPlaylistWithAI = async (
                     `${track.artists[0]?.name} - ${track.name}`
                 ).join(", ");
 
-                prompt += `The user enjoys songs like: ${trackExamples}. `;
-                prompt += `Please suggest similar songs that match the ${mood} mood. `;
+                prompt += `The user enjoys songs genres like: ${trackExamples}. `;
+                prompt += `So Please suggest similar songs with genre that match the ${mood} mood. `;
             }
         }
 
@@ -740,22 +836,33 @@ export const generateMoodPlaylistWithAI = async (
             try {
                 const aiFoundTracks = trackUris.slice(0, 5);
 
-                const recommendationsResponse = await fetch(
-                    `https://api.spotify.com/v1/recommendations?seed_tracks=${aiFoundTracks.join(',')}&limit=${Math.max(5, songCount - trackUris.length)}${marketParam}`,
-                    { headers }
-                );
+                // Fallback to search for related tracks
+                console.log("Using search fallback for related tracks");
+                const searchTrack = await fetch(`https://api.spotify.com/v1/tracks/${aiFoundTracks[0]}`, { headers });
 
-                if (recommendationsResponse.ok) {
-                    const recommendationsData = await recommendationsResponse.json();
-                    const relatedTrackUris = recommendationsData.tracks.map((track: any) => track.uri);
+                if (searchTrack.ok) {
+                    const trackData = await searchTrack.json();
+                    const searchQuery = `${trackData.name} ${trackData.artists[0].name}`;
 
-                    for (const uri of relatedTrackUris) {
-                        if (!trackUris.includes(uri)) {
-                            trackUris.push(uri);
+                    const searchResponse = await fetch(
+                        `https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=${Math.max(10, songCount - trackUris.length)}${marketParam}`,
+                        { headers }
+                    );
+
+                    if (searchResponse.ok) {
+                        const searchData = await searchResponse.json();
+                        const relatedTrackUris = searchData.tracks.items
+                            .filter((track: any) => !aiFoundTracks.includes(track.id))
+                            .map((track: any) => track.uri);
+
+                        for (const uri of relatedTrackUris) {
+                            if (!trackUris.includes(uri)) {
+                                trackUris.push(uri);
+                            }
                         }
-                    }
 
-                    console.log(`Added ${relatedTrackUris.length} related tracks from Spotify recommendations`);
+                        console.log(`Added ${relatedTrackUris.length} related tracks from search`);
+                    }
                 }
             } catch (error) {
                 console.error("Error getting related tracks:", error);
@@ -1033,4 +1140,4 @@ export const generateCustomPromptPlaylist = async (
         console.error("Error in generateCustomPromptPlaylist:", error);
         throw error;
     }
-}; 
+};

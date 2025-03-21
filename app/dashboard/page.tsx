@@ -195,12 +195,22 @@ export default function Dashboard() {
       setError(null);
 
       const playlistName = `My ${selectedMood.charAt(0).toUpperCase() + selectedMood.slice(1)} Vibes${selectedLanguage !== "any" ? ` (${selectedLanguage})` : ""}`;
-      const result = await generateMoodPlaylistWithAI(selectedMood, playlistName, 15, selectedLanguage);
+      const result = await generateMoodPlaylistWithAI(
+        selectedMood,
+        playlistName,
+        15,
+        selectedLanguage
+      );
 
-      const trackIds = result.tracks.map((track: any) => track.id);
+      // Check if playlist was created successfully
+      if (!result?.playlist?.id) {
+        throw new Error("Failed to create playlist on Spotify");
+      }
+
+      // Set the temp playlist with just the ID - we'll fetch tracks separately
       setTempPlaylist({
         id: result.playlist.id,
-        tracks: trackIds
+        tracks: []  // Will be populated after fetching tracks
       });
 
       let playlistTracks: any[] = [];
@@ -219,6 +229,12 @@ export default function Dashboard() {
             album: item.track.album.name,
             image: item.track.album.images[0]?.url
           }));
+
+          // Update tempPlaylist with the track IDs
+          setTempPlaylist(prev => ({
+            id: prev?.id || result.playlist.id,
+            tracks: playlistTracks.map(track => track.id)
+          }));
         }
       } else {
         const tracksResponse = await fetch(`https://api.spotify.com/v1/playlists/${result.playlist.id}/tracks`, {
@@ -233,6 +249,12 @@ export default function Dashboard() {
             artist: item.track.artists.map((artist: any) => artist.name).join(', '),
             album: item.track.album.name,
             image: item.track.album.images[0]?.url
+          }));
+
+          // Update tempPlaylist with the track IDs
+          setTempPlaylist(prev => ({
+            id: prev?.id || result.playlist.id,
+            tracks: playlistTracks.map(track => track.id)
           }));
         }
       }
