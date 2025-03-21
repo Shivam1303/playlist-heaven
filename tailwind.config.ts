@@ -55,37 +55,50 @@ const config: Config = {
         ring: 'hsl(var(--ring))',
         spotify: {
           black: '#050511',
-          darkgray: '#',
+          darkgray: '#121212',
           lightgray: '#282828',
           white: '#FFFFFF',
-          green: 'hsl(var(--spotify-green))',
-          orange: 'hsl(var(--spotify-orange))',
-          purple: 'hsl(var(--spotify-purple))',
-          neon: 'hsl(var(--spotify-neon))',
-          cyan: 'hsl(var(--spotify-cyan))',
+          green: '#1DB954',
+          orange: '#FF9D00',
+          purple: '#9C27B0',
+          neon: '#00E676',
+          cyan: '#1ED4D4',
         },
       },
       keyframes: {
         'accordion-down': {
-          from: {
-            height: '0',
-          },
-          to: {
-            height: 'var(--radix-accordion-content-height)',
-          },
+          from: { height: '0' },
+          to: { height: 'var(--radix-accordion-content-height)' },
         },
         'accordion-up': {
-          from: {
-            height: 'var(--radix-accordion-content-height)',
-          },
-          to: {
-            height: '0',
-          },
+          from: { height: 'var(--radix-accordion-content-height)' },
+          to: { height: '0' },
+        },
+        breathe: {
+          '0%, 100%': { transform: 'scale(1)' },
+          '50%': { transform: 'scale(1.05)' },
+        },
+        'title-gradient': {
+          '0%': { backgroundPosition: '0% 50%' },
+          '50%': { backgroundPosition: '100% 50%' },
+          '100%': { backgroundPosition: '0% 50%' },
+        },
+        float: {
+          '0%, 100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-10px)' },
+        },
+        pulse: {
+          '0%, 100%': { opacity: '1' },
+          '50%': { opacity: '0.5' },
         },
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
+        'breathe': 'breathe 3s ease-in-out infinite',
+        'title-gradient': 'title-gradient 5s ease infinite',
+        'float': 'float 6s ease-in-out infinite',
+        'pulse': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
     },
   },

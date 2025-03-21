@@ -2,6 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Audiowide&display=swap');
 :root {
   --foreground-rgb: 0, 0, 0;
   --background-start-rgb: 214, 219, 220;
@@ -79,12 +80,24 @@
   body {
     @apply bg-background text-foreground;
   }
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+      @apply font-bold;
+    }
+  
+    .font-audiowide {
+      font-family: 'Audiowide', cursive;
+    }
 }
 
 /* Custom Spotify-inspired utility classes */
 @layer utilities {
   .bg-spotify-black {
-    background-color: #121212;
+    background-color: #050511;
   }
   
   .bg-spotify-card {
@@ -96,19 +109,19 @@
   }
   
   .bg-spotify-green-gradient {
-    background: linear-gradient(135deg, hsl(var(--spotify-green)), hsl(var(--spotify-green)/0.8));
+    background: linear-gradient(135deg, #1DB954, #1DB954cc);
   }
   
   .bg-spotify-purple-gradient {
-    background: linear-gradient(135deg, hsl(var(--spotify-purple)), hsl(var(--spotify-purple)/0.8));
+    background: linear-gradient(135deg, #9C27B0, #9C27B0cc);
   }
   
   .bg-spotify-orange-gradient {
-    background: linear-gradient(135deg, hsl(var(--spotify-orange)), hsl(var(--spotify-orange)/0.8));
+    background: linear-gradient(135deg, #FF9D00, #FF9D00cc);
   }
   
   .text-spotify-green {
-    color: hsl(var(--spotify-green));
+    color: #1DB954;
   }
   
   .hover-scale {
@@ -118,4 +131,39 @@
   .hover-scale:hover {
     transform: scale(1.04);
   }
+    .glass-effect {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      background-color: rgba(18, 18, 18, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+  
+    .glassmorphism {
+      background: rgba(18, 18, 18, 0.25);
+      box-shadow: 0 8px 32px 0 rgba(29, 185, 84, 0.1);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+  
+    .text-glow {
+      text-shadow: 0 0 8px rgba(29, 185, 84, 0.6);
+    }
+  
+    .box-glow {
+      box-shadow: 0 0 15px rgba(29, 185, 84, 0.3);
+    }
+    }
+  
+    /* Animation for the breathing effect */
+    @keyframes breathe {
+  
+      0%,
+      100% {
+        transform: scale(1);
+      }
+  
+      50% {
+        transform: scale(1.05);
+      }
 }
