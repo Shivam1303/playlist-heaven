@@ -14,7 +14,7 @@ import {
   CardTitle,
   CardFooter
 } from "@/components/ui/card";
-import { Loader2, Music, ExternalLink, Check, X, Sparkles } from "lucide-react";
+import { Loader2, Music, ExternalLink, Check, X } from "lucide-react";
 import Link from "next/link";
 import {
   Select,
@@ -31,7 +31,8 @@ import {
   moodToAudioFeatures,
   getAvailableGenres,
   generateMoodPlaylistWithAI,
-  getSpotifyHeaders
+  getSpotifyHeaders,
+  getMarketFromLanguage
 } from "@/lib/spotify";
 
 interface Track {
@@ -101,6 +102,10 @@ export default function Dashboard() {
       // Get audio features for the selected mood
       const audioFeatures = moodToAudioFeatures[selectedMood as keyof typeof moodToAudioFeatures];
 
+      // Get market code from language
+      const market = getMarketFromLanguage(selectedLanguage);
+      console.log(`Using market code for ${selectedLanguage}: ${market || 'none (global)'}`);
+
       // Get user's top tracks to use as seeds
       let seedTracks: string[] = [];
       let seedGenres: string[] = [];
@@ -149,8 +154,10 @@ export default function Dashboard() {
 
       // Add language filter if a specific language is selected
       if (selectedLanguage !== "any") {
-        console.log(`Filtering for language: ${selectedLanguage}`);
-        recommendationParams.market = selectedLanguage;
+        console.log(`Filtering for language: ${selectedLanguage} with market: ${market}`);
+        if (market) {
+          recommendationParams.market = market;
+        }
       }
 
       console.log("Recommendation params:", recommendationParams);
@@ -212,8 +219,8 @@ export default function Dashboard() {
       setLoading(true);
       setError(null);
 
-      // Generate playlist using AI
-      const playlistName = `My ${selectedMood.charAt(0).toUpperCase() + selectedMood.slice(1)} Vibes`;
+      // Generate playlist using AI with personalized tracks
+      const playlistName = `My ${selectedMood.charAt(0).toUpperCase() + selectedMood.slice(1)} Vibes${selectedLanguage !== "any" ? ` (${selectedLanguage})` : ""}`;
       const result = await generateMoodPlaylistWithAI(selectedMood, playlistName, 15, selectedLanguage);
 
       console.log("DEBUG: AI Playlist created:", result);
@@ -265,7 +272,7 @@ export default function Dashboard() {
       setPlaylist({
         id: result.playlist.id,
         name: result.playlist.name,
-        description: result.playlist.description || `AI-generated playlist for ${selectedMood} mood`,
+        description: result.playlist.description || `AI-generated playlist for ${selectedMood} mood based on your listening history`,
         externalUrl: result.playlist.external_urls.spotify,
         tracks: playlistTracks
       });
@@ -361,192 +368,163 @@ export default function Dashboard() {
 
   if (status === "loading") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-spotify-black">
-        <div className="flex flex-col items-center">
-          <Loader2 className="h-10 w-10 text-spotify-green animate-spin mb-4" />
-          <div className="text-xl text-white">Loading your music profile...</div>
-        </div>
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-neutral-900 to-black">
+        <div className="text-xl text-white">Loading...</div>
       </div>
     );
   }
 
   return (
-    <main className="min-h-screen bg-spotify-black text-white pb-10">
-      {/* Decorative header gradient */}
-      <div className="h-64 bg-gradient-to-b from-spotify-purple/30 to-transparent absolute top-0 left-0 right-0 z-0" />
+    <main className="min-h-screen bg-gradient-to-b from-neutral-900 to-black p-6">
+      <div className="flex flex-col lg:flex-row gap-6 h-full">
+        <div className="flex-1">
+          <div className="mb-12 text-center">
+            <h1 className="mb-4 text-4xl font-bold text-white">Choose Your Mood</h1>
+            <p className="text-lg text-gray-400">
+              Select a mood and let AI create the perfect playlist for you
+            </p>
+          </div>
 
-      <div className="container mx-auto px-4 pt-8 relative z-10">
-        <div className="flex flex-col lg:flex-row gap-8">
-          {/* Main Content Area */}
-          <div className="flex-1">
-            <div className="mb-10">
-              <h1 className="mb-2 text-4xl font-bold text-white bg-clip-text text-transparent bg-gradient-to-r from-spotify-green to-spotify-cyan inline-block">
-                Choose Your Mood
-              </h1>
-              <p className="text-lg text-gray-300">
-                Select a mood and language, then let AI create the perfect playlist for you
-              </p>
-              <div className="flex items-center mt-2 bg-spotify-darkgray rounded-lg p-3 text-sm">
-                <Sparkles className="text-spotify-orange h-5 w-5 mr-2 flex-shrink-0" />
-                <p className="text-gray-400">
-                  The "AI + Your Taste" option combines your listening history with advanced AI recommendations
-                </p>
-              </div>
-            </div>
+          <MoodSelector selectedMood={selectedMood} onSelectMood={handleMoodSelect} />
 
-            {/* Mood Selector with updated styling */}
-            <div className="bg-spotify-darkgray p-6 rounded-xl mb-8">
-              <MoodSelector selectedMood={selectedMood} onSelectMood={handleMoodSelect} />
-            </div>
-
-            {/* Language Selector */}
-            <div className="bg-spotify-darkgray p-6 rounded-xl mb-6">
-              <label className="block text-sm font-medium text-gray-300 mb-3">
+          {/* Language Selector */}
+          <div className="mt-6 flex justify-center">
+            <div className="w-full max-w-xs">
+              <label className="block text-sm font-medium text-gray-400 mb-2">
                 Preferred Language
               </label>
               <Select
                 value={selectedLanguage}
                 onValueChange={setSelectedLanguage}
               >
-                <SelectTrigger className="w-full bg-spotify-lightgray border-none focus:ring-spotify-green text-white">
+                <SelectTrigger className={`w-full ${selectedLanguage !== "any" ? "border-green-400 bg-green-900/20" : ""}`}>
                   <SelectValue placeholder="Select Language" />
                 </SelectTrigger>
-                <SelectContent className="bg-spotify-lightgray border-spotify-darkgray text-white">
+                <SelectContent>
                   {languages.map((language) => (
-                    <SelectItem key={language.value} value={language.value} className="focus:bg-spotify-green/20 focus:text-white">
+                    <SelectItem key={language.value} value={language.value}>
                       {language.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-
-            {/* Status/Error Messages */}
-            {error && (
-              <div className={`mb-6 rounded-lg p-4 text-center ${error.includes("successfully") || error.includes("discarded") ? "bg-spotify-green/20 text-spotify-green" : "bg-red-500/20 text-red-300"}`}>
-                {error}
-              </div>
-            )}
-
-            {/* Action Buttons */}
-            <div className="flex flex-col sm:flex-row justify-center gap-4 mb-8">
-              <Button
-                size="lg"
-                className="px-8 py-6 bg-spotify-green hover:bg-spotify-green/90 hover-scale"
-                onClick={generatePlaylist}
-                disabled={loading || !selectedMood}
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Generating...
-                  </>
-                ) : (
-                  "Basic Playlist"
-                )}
-              </Button>
-
-              <Button
-                size="lg"
-                className="px-8 py-6 bg-spotify-purple hover:bg-spotify-purple/90 hover-scale"
-                onClick={generateAIPlaylist}
-                disabled={loading || !selectedMood}
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Generating...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="mr-2 h-5 w-5" /> AI + Your Taste
-                  </>
-                )}
-              </Button>
+              {selectedLanguage !== "any" && (
+                <p className="mt-2 text-xs text-green-400">
+                  Playlist will favor songs in {languages.find(l => l.value === selectedLanguage)?.label}
+                </p>
+              )}
             </div>
           </div>
 
-          {/* Playlist Sidebar */}
-          <div className="lg:w-[450px] relative">
-            <div className="sticky top-6">
-              <Card className="bg-spotify-darkgray border-none shadow-xl h-[calc(100vh-3rem)] overflow-hidden">
-                {playlist ? (
-                  <>
-                    <CardHeader className="border-b border-spotify-lightgray pb-4">
-                      <div className="flex items-center">
-                        <div className="bg-gradient-to-br from-spotify-orange to-spotify-green p-3 rounded-md mr-3">
-                          <Music className="h-6 w-6 text-white" />
-                        </div>
-                        <div>
-                          <CardTitle className="text-xl text-white">{playlist.name}</CardTitle>
-                          <CardDescription className="text-gray-400">{playlist.description}</CardDescription>
-                        </div>
-                      </div>
-                      <Link
-                        href={playlist.externalUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center mt-2 text-spotify-green hover:text-spotify-green/80 transition-colors"
-                      >
-                        Open in Spotify <ExternalLink className="ml-1 h-4 w-4" />
-                      </Link>
-                    </CardHeader>
-
-                    <CardContent className="overflow-y-auto max-h-[60vh] pt-4 scrollbar-thin scrollbar-track-spotify-black scrollbar-thumb-spotify-lightgray">
-                      <div className="space-y-2">
-                        {playlist.tracks.map((track) => (
-                          <div
-                            key={track.id}
-                            className="flex items-center gap-4 rounded-md p-2 hover:bg-spotify-lightgray transition-colors group"
-                          >
-                            {track.image && (
-                              <img
-                                src={track.image}
-                                alt={track.album}
-                                className="h-12 w-12 rounded-md object-cover group-hover:shadow-lg transition-shadow"
-                              />
-                            )}
-                            <div className="overflow-hidden flex-1">
-                              <div className="font-medium truncate text-white">{track.name}</div>
-                              <div className="text-sm text-gray-400 truncate">{track.artist}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-
-                    <CardFooter className="flex justify-between pt-4 border-t border-spotify-lightgray bg-spotify-darkgray">
-                      <Button
-                        onClick={savePlaylist}
-                        className="bg-spotify-green hover:bg-spotify-green/90"
-                        disabled={!tempPlaylist}
-                      >
-                        <Check className="mr-2 h-4 w-4" /> Save Playlist
-                      </Button>
-                      <Button
-                        onClick={discardPlaylist}
-                        variant="outline"
-                        className="border-gray-600 text-gray-300 hover:text-red-400 hover:bg-red-500/10 hover:border-red-500/50"
-                        disabled={!tempPlaylist}
-                      >
-                        <X className="mr-2 h-4 w-4" /> Discard
-                      </Button>
-                    </CardFooter>
-                  </>
-                ) : (
-                  <div className="flex h-full flex-col items-center justify-center p-8 text-center">
-                    <div className="bg-spotify-black/50 p-5 rounded-full mb-6">
-                      <Music className="h-14 w-14 text-spotify-green opacity-70" />
-                    </div>
-                    <h3 className="text-xl font-medium mb-3 text-white">No Playlist Yet</h3>
-                    <p className="text-gray-400 max-w-sm">
-                      Select a mood and click one of the generate buttons to create your personalized playlist.
-                    </p>
-                    <div className="mt-8 w-full max-w-xs h-1 bg-spotify-lightgray rounded-full overflow-hidden">
-                      <div className="h-full w-3/4 bg-gradient-to-r from-spotify-purple to-spotify-green" />
-                    </div>
-                  </div>
-                )}
-              </Card>
+          {error && (
+            <div className={`mt-6 rounded-md p-4 text-center ${error.includes("successfully") || error.includes("discarded") ? "bg-green-500/20 text-green-300" : "bg-red-500/20 text-red-300"}`}>
+              {error}
             </div>
+          )}
+
+          <div className="mt-8 flex flex-col md:flex-row justify-center gap-4">
+            <Button
+              size="lg"
+              className="px-8 bg-green-600 hover:bg-green-700"
+              onClick={generatePlaylist}
+              disabled={loading || !selectedMood}
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating...
+                </>
+              ) : (
+                "Basic Playlist"
+              )}
+            </Button>
+
+            <Button
+              size="lg"
+              className="px-8 bg-purple-600 hover:bg-purple-700"
+              onClick={generateAIPlaylist}
+              disabled={loading || !selectedMood}
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating...
+                </>
+              ) : (
+                "AI Playlist"
+              )}
+            </Button>
+          </div>
+        </div>
+
+        {/* Playlist Sidebar */}
+        <div className="lg:w-[400px]">
+          <div className="sticky top-6">
+            <Card className="bg-card/95 h-[calc(100vh-3rem)] overflow-y-auto">
+              {playlist ? (
+                <>
+                  <CardHeader>
+                    <CardTitle className="flex items-center">
+                      <Music className="mr-2 h-5 w-5" /> {playlist.name}
+                    </CardTitle>
+                    <CardDescription>{playlist.description}</CardDescription>
+                    <Link
+                      href={playlist.externalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center mt-2 text-primary hover:text-primary/80"
+                    >
+                      Open in Spotify <ExternalLink className="ml-1 h-4 w-4" />
+                    </Link>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-1">
+                      {playlist.tracks.map((track) => (
+                        <div
+                          key={track.id}
+                          className="flex items-center gap-4 rounded-md p-2 hover:bg-accent/50"
+                        >
+                          {track.image && (
+                            <img
+                              src={track.image}
+                              alt={track.album}
+                              className="h-12 w-12 rounded-md object-cover"
+                            />
+                          )}
+                          <div className="overflow-hidden">
+                            <div className="font-medium truncate">{track.name}</div>
+                            <div className="text-sm text-muted-foreground truncate">{track.artist}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                  <CardFooter className="flex justify-between pt-4 border-t">
+                    <Button
+                      onClick={savePlaylist}
+                      className="bg-green-600 hover:bg-green-700"
+                      disabled={!tempPlaylist}
+                    >
+                      <Check className="mr-2 h-4 w-4" /> Save Playlist
+                    </Button>
+                    <Button
+                      onClick={discardPlaylist}
+                      variant="outline"
+                      className="text-red-500 hover:text-red-600 hover:bg-red-100/10"
+                      disabled={!tempPlaylist}
+                    >
+                      <X className="mr-2 h-4 w-4" /> Discard
+                    </Button>
+                  </CardFooter>
+                </>
+              ) : (
+                  <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+                    <Music className="h-12 w-12 text-muted-foreground mb-4" />
+                    <h3 className="text-xl font-medium mb-2">No Playlist Yet</h3>
+                    <p className="text-muted-foreground">
+                      You have not generated a playlist yet. Select a mood and click one of the generate buttons.
+                    </p>
+                </div>
+              )}
+            </Card>
           </div>
         </div>
       </div>
