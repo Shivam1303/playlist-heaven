@@ -1,14 +1,48 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Music4, SparklesIcon } from "lucide-react";
+import { Music4, SparklesIcon, Waves, Headphones, Share2, Disc3Icon, Play, Pause } from "lucide-react";
 import { signIn, useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
+import { motion } from "framer-motion";
+
+// Some popular Spotify preview URLs for ambient music
+// These don't require authentication to play
+const PREVIEW_URLS = [
+  {
+    url: "https://p.scdn.co/mp3-preview/75a1b521de23a9ebd3dfa3dc0b569b5357a67c66",
+    name: "505",
+    artist: "Arctic Monkeys"
+  },
+  {
+    url: "https://p.scdn.co/mp3-preview/d6cee91bbe8e3bc37b8ae5fa3a09ffa78ec6e309",
+    name: "Ambient Melody",
+    artist: "PlaylistHeaven"
+  },
+  {
+    url: "https://p.scdn.co/mp3-preview/b266af1c8d352e33b1c6c740d1fb186f02820913",
+    name: "Peaceful Piano",
+    artist: "Various Artists"
+  },
+  {
+    url: "https://p.scdn.co/mp3-preview/792ed52ead2b9c5a84036166672c06a5cb8d8a8b",
+    name: "Chill Vibes",
+    artist: "Spotify"
+  }
+];
+
+// Fallback audio in case Spotify previews don't work
+const FALLBACK_AUDIO = "/audio/background-music.mp3";
 
 export default function Home() {
   const { data: session } = useSession();
   const router = useRouter();
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTrack, setCurrentTrack] = useState(PREVIEW_URLS[0]);
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     if (session) {
@@ -16,78 +50,478 @@ export default function Home() {
     }
   }, [session, router]);
 
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      setMousePosition({ x: e.clientX, y: e.clientY });
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    return () => window.removeEventListener("mousemove", handleMouseMove);
+  }, []);
+
+  const togglePlayback = () => {
+    if (!audioRef.current) return;
+
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      // Play current track
+      const playPromise = audioRef.current.play();
+
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            setIsPlaying(true);
+          })
+          .catch(error => {
+            console.error("Play failed:", error);
+            // Try another track if this one fails
+            tryNextTrack();
+          });
+      }
+    }
+  };
+
+  const tryNextTrack = useCallback(() => {
+    const nextIndex = (currentTrackIndex + 1) % PREVIEW_URLS.length;
+    setCurrentTrackIndex(nextIndex);
+    setCurrentTrack(PREVIEW_URLS[nextIndex]);
+
+    // This will trigger the useEffect to change the audio source
+  }, [currentTrackIndex]);
+
+  // Update audio source when track changes
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.src = currentTrack.url;
+      audioRef.current.load();
+
+      if (isPlaying) {
+        audioRef.current.play()
+          .catch(error => {
+            console.error("Failed to play new track:", error);
+            tryNextTrack();
+          });
+      }
+    }
+  }, [currentTrack, isPlaying, tryNextTrack]);
+
   const handleSpotifyLogin = () => {
     signIn("spotify", { callbackUrl: "/dashboard" });
   };
 
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1,
+        delayChildren: 0.3
+      }
+    }
+  };
+
+  const itemVariants = {
+    hidden: { y: 20, opacity: 0 },
+    visible: {
+      y: 0,
+      opacity: 1,
+      transition: {
+        type: "spring",
+        stiffness: 100
+      }
+    }
+  };
+
+  const featureCardVariants = {
+    hidden: { opacity: 0, y: 50 },
+    visible: {
+      opacity: 1,
+      y: 0,
+      transition: { type: "spring", stiffness: 100 }
+    },
+    hover: {
+      y: -10,
+      boxShadow: "0 10px 25px -5px rgba(29, 185, 84, 0.1)",
+      backgroundColor: "rgba(255, 255, 255, 0.05)",
+      borderColor: "rgba(255, 255, 255, 0.1)"
+    }
+  };
+
   return (
-    <main className="min-h-screen bg-gradient-to-b from-spotify-black to-[#101020] text-white relative overflow-hidden">
-      {/* Background gradient effects */}
-      <div className="absolute inset-0 bg-gradient-to-tr from-spotify-purple/10 via-transparent to-spotify-green/10 pointer-events-none" />
-      <div className="absolute top-0 left-0 right-0 h-1/3 bg-gradient-radial from-spotify-purple/20 to-transparent pointer-events-none" />
-      <div className="absolute bottom-0 right-0 w-1/3 h-1/3 bg-gradient-radial from-spotify-green/20 to-transparent pointer-events-none" />
+    <main className="min-h-screen layout-wrapper bg-black text-white overflow-hidden relative">
+      {/* Audio Element - We include the actual HTML element in the DOM */}
+      <audio
+        ref={audioRef}
+        src={currentTrack.url}
+        preload="auto"
+        loop
+        crossOrigin="anonymous"
+        onError={() => tryNextTrack()}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        style={{ display: 'none' }}
+      />
 
-      <div className="container relative mx-auto px-6 py-16 z-10">
-        <div className="flex flex-col items-center justify-center space-y-12 text-center">
-          {/* Logo area with enhanced styling */}
-          <div className="inline-flex items-center rounded-full bg-gradient-to-r from-spotify-green to-spotify-cyan p-1 shadow-lg shadow-spotify-green/20">
-            <div className="rounded-full bg-spotify-black p-6">
-              <Music4 className="h-20 w-20 text-spotify-green" />
+      {/* Music Player Controls */}
+      <motion.div
+        className="fixed bottom-6 right-6 z-50 bg-spotify-green/20 backdrop-blur-md p-3 rounded-full border border-spotify-green/30 cursor-pointer"
+        whileHover={{ scale: 1.1 }}
+        whileTap={{ scale: 0.95 }}
+        onClick={togglePlayback}
+      >
+        {isPlaying ? (
+          <Pause className="w-5 h-5 text-spotify-green" />
+        ) : (
+          <Play className="w-5 h-5 text-spotify-green" />
+        )}
+      </motion.div>
+
+      {/* Now Playing Indicator */}
+      {isPlaying && (
+        <motion.div
+          className="fixed bottom-6 left-6 z-50 bg-black/50 backdrop-blur-md py-2 px-4 rounded-full border border-spotify-green/30"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 20 }}
+        >
+          <div className="flex items-center space-x-2">
+            <div className="w-8 h-8 bg-spotify-green/20 rounded-full flex items-center justify-center">
+              <Music4 className="w-4 h-4 text-spotify-green" />
+            </div>
+            <div>
+              <p className="text-xs text-white/80">Now Playing</p>
+              <p className="text-sm font-medium">{currentTrack.name}</p>
             </div>
           </div>
+        </motion.div>
+      )}
 
-          {/* Animated main heading */}
-          <div className="space-y-8">
-            <h1 className="text-5xl font-extrabold tracking-tight sm:text-7xl bg-clip-text text-transparent bg-gradient-to-r from-spotify-green via-spotify-cyan to-white pb-2 font-audiowide">
-              AI Spotify Playlist Generator
-            </h1>
-            <p className="max-w-[700px] text-xl text-gray-300 sm:text-2xl">
-              Create personalized playlists based on your mood and listening history using
-              the power of AI
-            </p>
+      {/* Dynamic background effects */}
+      <div className="absolute inset-0 bg-gradient-to-b from-[#111111] to-black opacity-80 z-0"></div>
+      <div
+        className="absolute inset-0 bg-[url('/noise.png')] opacity-[0.03] mix-blend-overlay z-0"
+        style={{ backgroundSize: '200px 200px' }}
+      ></div>
+
+      {/* Cursor spotlight effect with framer-motion */}
+      <motion.div
+        className="absolute w-[500px] h-[500px] rounded-full pointer-events-none z-10"
+        style={{
+          background: `radial-gradient(circle, rgba(30, 215, 96, 0.15) 0%, rgba(0,0,0,0) 70%)`,
+        }}
+        animate={{
+          x: mousePosition.x - 250,
+          y: mousePosition.y - 250
+        }}
+        transition={{
+          type: "spring",
+          damping: 30,
+          stiffness: 200
+        }}
+      />
+
+      {/* Floating vinyl records */}
+      <motion.div
+        className="absolute top-[10%] right-[10%] opacity-20 z-0"
+        animate={{
+          y: [0, -30, 0],
+          rotate: [0, -8, 0],
+        }}
+        transition={{
+          duration: 8,
+          repeat: Infinity,
+          ease: "easeInOut"
+        }}
+      >
+        <Disc3Icon className="w-40 h-40 text-spotify-green" />
+      </motion.div>
+
+      <motion.div
+        className="absolute bottom-[15%] left-[8%] opacity-20 z-0"
+        animate={{
+          y: [0, -20, 0],
+          rotate: [0, 5, 0],
+        }}
+        transition={{
+          duration: 6,
+          repeat: Infinity,
+          ease: "easeInOut"
+        }}
+      >
+        <Disc3Icon className="w-28 h-28 text-spotify-purple" />
+      </motion.div>
+
+      {/* Content Container */}
+      <div className="container mx-auto px-4 relative z-20">
+        {/* Header with logo */}
+        <motion.header
+          className="py-8 flex justify-between items-center"
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+        >
+          <div className="flex items-center space-x-2">
+            <motion.div
+              className="rounded-full bg-spotify-green p-2"
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+            >
+              <Music4 className="h-6 w-6 text-black" />
+            </motion.div>
+            <span className="font-bold text-xl tracking-tighter">PlaylistHeaven</span>
+          </div>
+        </motion.header>
+
+        {/* Hero Section */}
+        <motion.section
+          className="flex flex-col md:flex-row items-center justify-between py-16 md:py-28"
+          variants={containerVariants}
+          initial="hidden"
+          animate="visible"
+        >
+          <div className="w-full md:w-1/2 space-y-8 md:pr-8">
+            <div className="space-y-4">
+              <motion.div
+                className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-sm backdrop-blur-sm border border-white/10"
+                variants={itemVariants}
+              >
+                <SparklesIcon className="h-4 w-4 mr-2 text-spotify-green" />
+                <span>AI-Powered Playlist Generation</span>
+              </motion.div>
+
+              <motion.h1
+                className="text-5xl md:text-7xl font-extrabold tracking-tighter leading-tight text-transparent bg-clip-text bg-gradient-to-br from-white via-spotify-green to-spotify-cyan"
+                variants={itemVariants}
+              >
+                Your Perfect <br />
+                <span className="relative inline-block">
+                  <span>Playlist Awaits</span>
+                  <motion.span
+                    className="absolute inset-0 bg-gradient-to-r from-spotify-green via-spotify-cyan to-spotify-green bg-clip-text text-transparent"
+                    animate={{
+                      backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"],
+                    }}
+                    transition={{
+                      duration: 3,
+                      repeat: Infinity,
+                      ease: "linear"
+                    }}
+                  >
+                    Playlist Awaits
+                  </motion.span>
+                </span>
+              </motion.h1>
+
+              <motion.p
+                className="text-lg md:text-xl text-gray-300 max-w-lg"
+                variants={itemVariants}
+              >
+                Discover the next generation of playlist creation combining your Spotify history with AI to deliver personalized music experiences.
+              </motion.p>
+            </div>
+
+            {/* CTA Button */}
+            <motion.div
+              className="pt-4"
+              variants={itemVariants}
+            >
+              <motion.div
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <Button
+                  onClick={handleSpotifyLogin}
+                  className="relative group overflow-hidden rounded-full bg-spotify-green hover:bg-spotify-green/90 text-black font-medium px-8 py-6 text-lg"
+                >
+                  <span className="relative z-10 flex items-center">
+                    <Headphones className="mr-2 h-5 w-5" />
+                    Connect with Spotify
+                    <motion.div
+                      className="ml-2"
+                      animate={{ x: [0, 5, 0] }}
+                      transition={{ duration: 1, repeat: Infinity }}
+                    >
+                      →
+                    </motion.div>
+                  </span>
+                  <motion.span
+                    className="absolute inset-0 bg-white/10"
+                    initial={{ y: "100%" }}
+                    whileHover={{ y: 0 }}
+                    transition={{ duration: 0.3 }}
+                  />
+                </Button>
+              </motion.div>
+            </motion.div>
+
+            {/* Stats */}
+            <motion.div
+              className="flex space-x-6 pt-8"
+              variants={itemVariants}
+            >
+              <div>
+                <motion.div
+                  className="text-3xl font-bold"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 1, delay: 0.5 }}
+                >
+                  1000+
+                </motion.div>
+                <div className="text-gray-400 text-sm">Playlists Generated</div>
+              </div>
+              <div className="h-12 w-px bg-gray-800"></div>
+              <div>
+                <motion.div
+                  className="text-3xl font-bold"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 1, delay: 0.7 }}
+                >
+                  24/7
+                </motion.div>
+                <div className="text-gray-400 text-sm">AI Assistance</div>
+              </div>
+              <div className="h-12 w-px bg-gray-800"></div>
+              <div>
+                <motion.div
+                  className="text-3xl font-bold"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 1, delay: 0.9 }}
+                >
+                  100%
+                </motion.div>
+                <div className="text-gray-400 text-sm">Free to Use</div>
+              </div>
+            </motion.div>
           </div>
 
-          {/* Feature bullets with hover effects */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl text-left">
-            <div className="glass-effect rounded-xl p-6 hover:scale-105 transition-transform duration-300 border border-spotify-green/10 shadow-lg shadow-spotify-green/5">
-              <div className="inline-flex bg-spotify-purple/20 p-2 rounded-lg mb-4">
-                <SparklesIcon className="h-6 w-6 text-spotify-purple" />
-              </div>
-              <h3 className="text-lg font-semibold mb-2 text-white">AI-Powered</h3>
-              <p className="text-gray-300">Intelligent playlist generation using advanced AI algorithms</p>
-            </div>
-            <div className="glass-effect rounded-xl p-6 hover:scale-105 transition-transform duration-300 border border-spotify-green/10 shadow-lg shadow-spotify-green/5">
-              <div className="inline-flex bg-spotify-orange/20 p-2 rounded-lg mb-4">
-                <Music4 className="h-6 w-6 text-spotify-orange" />
-              </div>
-              <h3 className="text-lg font-semibold mb-2 text-white">Mood Based</h3>
-              <p className="text-gray-300">Select your mood and get the perfect playlist for any occasion</p>
-            </div>
-            <div className="glass-effect rounded-xl p-6 hover:scale-105 transition-transform duration-300 border border-spotify-green/10 shadow-lg shadow-spotify-green/5">
-              <div className="inline-flex bg-spotify-neon/20 p-2 rounded-lg mb-4">
-                <svg className="h-6 w-6 text-spotify-neon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M9 18V5l12 13V5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-semibold mb-2 text-white">Personalized</h3>
-              <p className="text-gray-300">Tailored to your listening history and preferences</p>
-            </div>
-          </div>
-
-          {/* CTA Button with enhanced styling */}
-          <Button
-            size="lg"
-            className="px-8 py-6 text-lg bg-spotify-green hover:bg-spotify-green/90 hover:scale-105 transition-all duration-300 shadow-lg shadow-spotify-green/30 text-glow"
-            onClick={handleSpotifyLogin}
+          {/* Hero Visualization */}
+          <motion.div
+            className="w-full md:w-1/2 mt-12 md:mt-0 flex justify-center"
+            variants={itemVariants}
           >
-            Connect with Spotify
-          </Button>
+            <motion.div
+              className="relative w-[400px] h-[400px] rounded-full bg-gradient-to-br from-spotify-green/20 to-spotify-purple/20 flex items-center justify-center backdrop-blur-sm border border-white/5"
+              animate={{ rotate: 360 }}
+              transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+            >
+              <div className="absolute inset-8 rounded-full bg-black/80 flex items-center justify-center">
+                <div className="flex items-end h-16 gap-1">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <motion.div
+                      key={i}
+                      className="w-6 bg-spotify-green rounded-sm"
+                      animate={{ height: [20, 50, 20] }}
+                      transition={{
+                        duration: 1.5,
+                        repeat: Infinity,
+                        delay: i * 0.2,
+                        ease: "easeInOut"
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+              <motion.div
+                className="absolute inset-0 rounded-full border border-white/10"
+                animate={{ opacity: [0.2, 0.5, 0.2] }}
+                transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+              />
+            </motion.div>
+          </motion.div>
+        </motion.section>
 
-          {/* Footer note */}
-          <p className="text-sm text-gray-500 mt-10">
-            Powered by Spotify API & AI • Your music, reimagined
-          </p>
-        </div>
+        {/* Features Section */}
+        <section className="py-16 md:py-24">
+          <motion.div
+            className="text-center mb-16"
+            initial={{ opacity: 0, y: 50 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.5 }}
+          >
+            <h2 className="text-3xl md:text-4xl font-bold mb-4">Craft Your Perfect Soundtrack</h2>
+            <p className="text-gray-400 max-w-2xl mx-auto">Our AI-powered tool understands your musical tastes and helps you create the perfect playlists for any moment.</p>
+          </motion.div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <motion.div
+              className="p-8 rounded-2xl bg-white/[0.03] border border-white/5 transition-all"
+              variants={featureCardVariants}
+              initial="hidden"
+              whileInView="visible"
+              whileHover="hover"
+              viewport={{ once: true, margin: "-100px" }}
+            >
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-spotify-green/20 to-spotify-green/5 mb-4">
+                <SparklesIcon className="h-6 w-6 text-spotify-green" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">AI-Powered</h3>
+              <p className="text-gray-400">Our advanced AI analyzes your listening patterns to generate playlists that match your unique taste.</p>
+            </motion.div>
+
+            <motion.div
+              className="p-8 rounded-2xl bg-white/[0.03] border border-white/5 transition-all"
+              variants={featureCardVariants}
+              initial="hidden"
+              whileInView="visible"
+              whileHover="hover"
+              viewport={{ once: true, margin: "-100px" }}
+              transition={{ delay: 0.1 }}
+            >
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-spotify-green/20 to-spotify-green/5 mb-4">
+                <Waves className="h-6 w-6 text-spotify-green" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">Mood Based</h3>
+              <p className="text-gray-400">Set the mood for any occasion with playlists tailored to your emotional state or activity.</p>
+            </motion.div>
+
+            <motion.div
+              className="p-8 rounded-2xl bg-white/[0.03] border border-white/5 transition-all"
+              variants={featureCardVariants}
+              initial="hidden"
+              whileInView="visible"
+              whileHover="hover"
+              viewport={{ once: true, margin: "-100px" }}
+              transition={{ delay: 0.2 }}
+            >
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-spotify-green/20 to-spotify-green/5 mb-4">
+                <Share2 className="h-6 w-6 text-spotify-green" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">Easy Sharing</h3>
+              <p className="text-gray-400">Share your personalized playlists directly to Spotify and with friends in just a few clicks.</p>
+            </motion.div>
+          </div>
+        </section>
+
+        {/* Footer */}
+        <motion.footer
+          className="border-t border-white/10 py-8"
+          initial={{ opacity: 0 }}
+          whileInView={{ opacity: 1 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.5 }}
+        >
+          <div className="flex flex-col md:flex-row justify-between items-center">
+            <div className="flex items-center space-x-2 mb-4 md:mb-0">
+              <motion.div
+                className="rounded-full bg-spotify-green p-1"
+                whileHover={{ scale: 1.2, rotate: 360 }}
+                transition={{ duration: 0.5 }}
+              >
+                <Music4 className="h-4 w-4 text-black" />
+              </motion.div>
+              <span className="font-medium">PlaylistHeaven</span>
+            </div>
+            <div className="text-sm text-gray-500">
+              Powered by Spotify API & AI • Your music, reimagined
+            </div>
+          </div>
+        </motion.footer>
       </div>
     </main>
   );

@@ -585,559 +585,586 @@ interface HuggingFaceTextGenRequest {
 }
 
 export const generateMoodPlaylistWithAI = async (
-    mood: string,
-    playlistName: string,
-    songCount: number = 20,
-    language: string = "any"
+  mood: string,
+  playlistName: string,
+  songCount: number = 20,
+  language: string = 'any'
 ) => {
-    const headers = await getSpotifyHeaders();
+  const headers = await getSpotifyHeaders();
+
+  try {
+    console.log(`Getting user's music profile for mood: ${mood} in language: ${language}`);
+
+    const market = getMarketFromLanguage(language);
+    console.log(`Using market code for ${language}: ${market || 'none (global)'}`);
+
+    let userTopTracks: any[] = [];
+    let userRecentTracks: any[] = [];
 
     try {
-        console.log(`Getting user's music profile for mood: ${mood} in language: ${language}`);
+      const topTracksResponse = await fetch(
+        `https://api.spotify.com/v1/me/top/tracks?time_range=medium_term&limit=10`,
+        { headers }
+      );
 
-        const market = getMarketFromLanguage(language);
-        console.log(`Using market code for ${language}: ${market || 'none (global)'}`);
+      if (topTracksResponse.ok) {
+        const topTracksData = await topTracksResponse.json();
+        userTopTracks = topTracksData.items || [];
+      }
 
-        let userTopTracks: any[] = [];
-        let userRecentTracks: any[] = [];
+      const recentTracksResponse = await fetch(
+        `https://api.spotify.com/v1/me/player/recently-played?limit=10`,
+        { headers }
+      );
 
-        try {
-            const topTracksResponse = await fetch(
-                `https://api.spotify.com/v1/me/top/tracks?time_range=medium_term&limit=10`,
-                { headers }
-            );
+      if (recentTracksResponse.ok) {
+        const recentTracksData = await recentTracksResponse.json();
+        userRecentTracks = recentTracksData.items?.map((item: any) => item.track) || [];
+      }
+    } catch (error) {
+      console.error("Error fetching user's music profile:", error);
+    }
 
-            if (topTracksResponse.ok) {
-                const topTracksData = await topTracksResponse.json();
-                userTopTracks = topTracksData.items || [];
-            }
+    const API_URL =
+      'https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1';
+    const API_KEY = process.env.NEXT_PUBLIC_HUGGINGFACE_API_KEY;
 
-            const recentTracksResponse = await fetch(
-                `https://api.spotify.com/v1/me/player/recently-played?limit=10`,
-                { headers }
-            );
+    if (!API_KEY) {
+      console.error('HUGGINGFACE_API_KEY is not defined in environment variables');
+      const recommendations = await getAIMoodRecommendations(mood, songCount, language);
 
-            if (recentTracksResponse.ok) {
-                const recentTracksData = await recentTracksResponse.json();
-                userRecentTracks = recentTracksData.items?.map((item: any) => item.track) || [];
-            }
-        } catch (error) {
-            console.error("Error fetching user's music profile:", error);
-        }
+      const playlistDescription = `AI-generated playlist for ${mood} mood${
+        language !== 'any' ? ` in ${language}` : ''
+      } based on your listening history`;
+      const playlistData = await createPlaylist(playlistName, playlistDescription);
 
-        console.log(`Generating ${songCount} song suggestions for mood: ${mood} in language: ${language}`);
+      const trackUris = recommendations.tracks.map((track: any) => track.uri);
+      await addTracksToPlaylist(playlistData.id, trackUris);
 
-        // Use a more advanced model
-        const API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1";
-        const API_KEY = process.env.NEXT_PUBLIC_HUGGINGFACE_API_KEY;
+      return {
+        playlist: playlistData,
+        tracks: trackUris.length,
+        fallback: true,
+        message: 'Used fallback mood recommendations due to missing Hugging Face API key',
+      };
+    }
 
-        console.log("Using Mistral-7B model for generation:", API_KEY ? API_KEY.substring(0, 5) + "..." : "none");
+    let prompt = `Generate a list of ${songCount} unique and diverse songs that evoke a ${mood} mood. `;
+    prompt += `These songs should include a mix of mainstream tracks, emerging artists, and hidden gems, spanning different eras, styles, and regions to offer a fresh and varied collection. `;
 
-        if (!API_KEY) {
-            console.error("HUGGINGFACE_API_KEY is not defined in environment variables");
-            const recommendations = await getAIMoodRecommendations(mood, songCount, language);
+    if (language !== 'any') {
+      const languageName = language.toUpperCase();
+      prompt += `All songs must be in ${languageName}. `;
+    }
 
-            const playlistDescription = `AI-generated playlist for ${mood} mood${language !== "any" ? ` in ${language}` : ""} based on your listening history`;
-            const playlistData = await createPlaylist(playlistName, playlistDescription);
+    if (userTopTracks.length > 0 || userRecentTracks.length > 0) {
+      const combinedTracks = [...userTopTracks, ...userRecentTracks]
+        .filter((track, index, self) => index === self.findIndex((t) => t.id === track.id))
+        .slice(0, 5);
+      if (combinedTracks.length > 0) {
+        const trackExamples = combinedTracks
+          .map((track) => `${track.artists[0]?.name} - ${track.name}`)
+          .join(', ');
+        prompt += `The user enjoys songs like: ${trackExamples}. Use this as a reference but introduce new artists and varied options that capture the ${mood} mood. `;
+      }
+    }
 
-            const trackUris = recommendations.tracks.map((track: any) => track.uri);
-            await addTracksToPlaylist(playlistData.id, trackUris);
+    prompt += `Avoid focusing solely on popular songs or repeating artists. `;
+    prompt += `Format your answer strictly as a numbered list with each entry in the format: "Artist Name - Song Title". `;
+    prompt += `Only include real, existing songs. Here is your list:\n1.`;
 
-            return {
-                playlist: playlistData,
-                tracks: trackUris.length,
-                fallback: true,
-                message: "Used fallback mood recommendations due to missing Hugging Face API key"
-            };
-        }
+    const huggingFaceResponse = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        inputs: prompt,
+        parameters: {
+          max_new_tokens: songCount * 50,
+          temperature: 0.7,
+          top_p: 0.9,
+          repetition_penalty: 1.2,
+          do_sample: true,
+          top_k: 50,
+        },
+      } as HuggingFaceTextGenRequest),
+    });
 
-        // Enhanced prompt with more context and structure
-        let prompt = `Create a list of ${songCount} songs that perfectly match a ${mood} mood. `;
-        prompt += `The songs should be well-known and popular in their respective genres. `;
+    if (!huggingFaceResponse.ok) {
+      throw new Error(`Hugging Face API error: ${huggingFaceResponse.statusText}`);
+    }
 
-        if (language !== "any") {
-            const languageName = language.toUpperCase();
-            prompt += `All songs you suggest much be in the ${languageName} language. `;
-        }
+    const result = await huggingFaceResponse.json();
+    const generatedText = result[0]?.generated_text || '';
 
-        if (userTopTracks.length > 0 || userRecentTracks.length > 0) {
-            const combinedTracks = [...userTopTracks, ...userRecentTracks]
-                .filter((track, index, self) =>
-                    index === self.findIndex((t) => t.id === track.id)
-                )
-                .slice(0, 5);
+    const songSuggestions: { artist: string; title: string }[] = [];
+    const songRegex = /^\d+\.\s+([^–—-]+)\s*[-–—]\s*([^–—-]+)$/gim;
+    let match;
 
-            if (combinedTracks.length > 0) {
-                const trackExamples = combinedTracks.map(track =>
-                    `${track.artists[0]?.name} - ${track.name}`
-                ).join(", ");
-
-                prompt += `The user enjoys songs genres like: ${trackExamples}. `;
-                prompt += `So Please suggest similar songs with genre that match the ${mood} mood. `;
-            }
-        }
-
-        prompt += `Format the response as a numbered list with each entry in the format: "Artist Name - Song Title". `;
-        prompt += `Only include real, existing songs. Here's the list:\n1.`;
-
-        const huggingFaceResponse = await fetch(API_URL, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${API_KEY}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                inputs: prompt,
-                parameters: {
-                    max_new_tokens: songCount * 50, // Increased token limit
-                    temperature: 0.7, // Slightly lower for more focused results
-                    top_p: 0.9,
-                    repetition_penalty: 1.2,
-                    do_sample: true,
-                    top_k: 50
-                }
-            } as HuggingFaceTextGenRequest)
+    while ((match = songRegex.exec(generatedText)) !== null && songSuggestions.length < songCount) {
+      if (match[1] && match[2]) {
+        songSuggestions.push({
+          artist: match[1].trim(),
+          title: match[2].trim(),
         });
+      }
+    }
 
-        if (!huggingFaceResponse.ok) {
-            throw new Error(`Hugging Face API error: ${huggingFaceResponse.statusText}`);
-        }
-
-        const result = await huggingFaceResponse.json();
-        const generatedText = result[0]?.generated_text || "";
-
-        // Enhanced song suggestion parsing
-        const songSuggestions: { artist: string, title: string; }[] = [];
-        const songRegex = /^\d+\.\s+([^–—-]+)\s*[-–—]\s*([^–—-]+)$/gmi;
-        let match;
-
-        while ((match = songRegex.exec(generatedText)) !== null && songSuggestions.length < songCount) {
-            if (match[1] && match[2]) {
-                songSuggestions.push({
-                    artist: match[1].trim(),
-                    title: match[2].trim()
-                });
+    if (songSuggestions.length < songCount) {
+      const lines = generatedText.split('\n');
+      for (const line of lines) {
+        if (line.match(/^\d+\./)) {
+          const parts = line.split(/[-–—]/);
+          if (parts.length >= 2) {
+            const artist = parts[0].replace(/^\d+\.\s*/, '').trim();
+            const title = parts.slice(1).join('').trim();
+            if (
+              artist &&
+              title &&
+              !songSuggestions.some((s) => s.artist === artist && s.title === title)
+            ) {
+              songSuggestions.push({ artist, title });
             }
+          }
         }
+      }
+    }
 
-        // Fallback parsing if the first method doesn't find enough songs
-        if (songSuggestions.length < songCount) {
-            const lines = generatedText.split('\n');
-            for (const line of lines) {
-                if (line.match(/^\d+\./)) {
-                    const parts = line.split(/[-–—]/);
-                    if (parts.length >= 2) {
-                        const artist = parts[0].replace(/^\d+\.\s*/, '').trim();
-                        const title = parts.slice(1).join('').trim();
-                        if (artist && title && !songSuggestions.some(s => s.artist === artist && s.title === title)) {
-                            songSuggestions.push({ artist, title });
-                        }
-                    }
-                }
-            }
-        }
+    console.log(`AI suggested ${songSuggestions.length} songs`);
 
-        console.log(`AI suggested ${songSuggestions.length} songs`);
+    const trackUris: string[] = [];
 
-        const trackUris: string[] = [];
+    const marketParam = market ? `&market=${market}` : '';
 
-        const marketParam = market ? `&market=${market}` : "";
-
-        for (const song of songSuggestions) {
-            try {
-                // First try with exact artist search
-                const exactSearchQuery = `track:"${song.title}" artist:"${song.artist}"`;
-                let searchResponse = await fetch(
-                    `https://api.spotify.com/v1/search?q=${encodeURIComponent(exactSearchQuery)}&type=track&limit=5${marketParam}`,
-                    { headers }
-                );
-
-                let foundExactMatch = false;
-                let foundTrack = null;
-
-                if (searchResponse.ok) {
-                    const searchData = await searchResponse.json();
-                    if (searchData.tracks.items.length > 0) {
-                        // Try to find exact artist match
-                        foundTrack = searchData.tracks.items.find((track: any) =>
-                            track.artists.some((artist: any) =>
-                                artist.name.toLowerCase() === song.artist.toLowerCase() ||
-                                artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
-                                song.artist.toLowerCase().includes(artist.name.toLowerCase())
-                            )
-                        );
-
-                        if (foundTrack) {
-                            foundExactMatch = true;
-                            console.log(`Found exact match: ${foundTrack.artists[0].name} - ${foundTrack.name}`);
-                        }
-                    }
-                }
-
-                // If exact match not found, try with more general search
-                if (!foundExactMatch) {
-                    const generalSearchQuery = `${song.title} ${song.artist}`;
-                    searchResponse = await fetch(
-                        `https://api.spotify.com/v1/search?q=${encodeURIComponent(generalSearchQuery)}&type=track&limit=10${marketParam}`,
-                        { headers }
-                    );
-
-                    if (searchResponse.ok) {
-                        const searchData = await searchResponse.json();
-                        if (searchData.tracks.items.length > 0) {
-                            // Calculate similarity score for each result to find best match
-                            const sortedResults = searchData.tracks.items.sort((a: any, b: any) => {
-                                // Check if title matches
-                                const aTitle = a.name.toLowerCase();
-                                const bTitle = b.name.toLowerCase();
-                                const targetTitle = song.title.toLowerCase();
-
-                                // Check if artist matches
-                                const aArtistMatch = a.artists.some((artist: any) =>
-                                    artist.name.toLowerCase() === song.artist.toLowerCase() ||
-                                    artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
-                                    song.artist.toLowerCase().includes(artist.name.toLowerCase())
-                                );
-
-                                const bArtistMatch = b.artists.some((artist: any) =>
-                                    artist.name.toLowerCase() === song.artist.toLowerCase() ||
-                                    artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
-                                    song.artist.toLowerCase().includes(artist.name.toLowerCase())
-                                );
-
-                                // Prioritize artist match then title match
-                                if (aArtistMatch && !bArtistMatch) return -1;
-                                if (!aArtistMatch && bArtistMatch) return 1;
-
-                                // If both or neither match artist, compare title similarity
-                                const aTitleSimilarity = aTitle === targetTitle ? 2 :
-                                    (aTitle.includes(targetTitle) || targetTitle.includes(aTitle) ? 1 : 0);
-                                const bTitleSimilarity = bTitle === targetTitle ? 2 :
-                                    (bTitle.includes(targetTitle) || targetTitle.includes(bTitle) ? 1 : 0);
-
-                                return bTitleSimilarity - aTitleSimilarity;
-                            });
-
-                            foundTrack = sortedResults[0];
-                            console.log(`Found best match: ${foundTrack.artists[0].name} - ${foundTrack.name} (original request: ${song.artist} - ${song.title})`);
-                        }
-                    }
-                }
-
-                if (foundTrack) {
-                    trackUris.push(foundTrack.uri);
-                }
-            } catch (error) {
-                console.error(`Error searching for track: ${song.artist} - ${song.title}`, error);
-            }
-        }
-
-        if (trackUris.length > 0) {
-            try {
-                const aiFoundTracks = trackUris.slice(0, 5);
-
-                // Fallback to search for related tracks
-                console.log("Using search fallback for related tracks");
-                const searchTrack = await fetch(`https://api.spotify.com/v1/tracks/${aiFoundTracks[0]}`, { headers });
-
-                if (searchTrack.ok) {
-                    const trackData = await searchTrack.json();
-                    const searchQuery = `${trackData.name} ${trackData.artists[0].name}`;
-
-                    const searchResponse = await fetch(
-                        `https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=${Math.max(10, songCount - trackUris.length)}${marketParam}`,
-                        { headers }
-                    );
-
-                    if (searchResponse.ok) {
-                        const searchData = await searchResponse.json();
-                        const relatedTrackUris = searchData.tracks.items
-                            .filter((track: any) => !aiFoundTracks.includes(track.id))
-                            .map((track: any) => track.uri);
-
-                        for (const uri of relatedTrackUris) {
-                            if (!trackUris.includes(uri)) {
-                                trackUris.push(uri);
-                            }
-                        }
-
-                        console.log(`Added ${relatedTrackUris.length} related tracks from search`);
-                    }
-                }
-            } catch (error) {
-                console.error("Error getting related tracks:", error);
-            }
-        }
-
-        if (trackUris.length < 5) {
-            console.log("Not enough AI-suggested songs found. Searching for mood directly.");
-            const moodSearchResponse = await fetch(
-                `https://api.spotify.com/v1/search?q=${encodeURIComponent(mood)}&type=track&limit=${songCount - trackUris.length}${marketParam}`,
-                { headers }
-            );
-
-            if (moodSearchResponse.ok) {
-                const moodSearchData = await moodSearchResponse.json();
-                const moodTrackUris = moodSearchData.tracks.items.map((track: any) => track.uri);
-
-                for (const uri of moodTrackUris) {
-                    if (!trackUris.includes(uri)) {
-                        trackUris.push(uri);
-                    }
-                }
-            }
-        }
-
-        if (trackUris.length === 0) {
-            throw new Error("Could not find any tracks for the requested mood");
-        }
-
-        const userResponse = await fetch("https://api.spotify.com/v1/me", { headers });
-        if (!userResponse.ok) {
-            throw new Error(`Failed to fetch user info: ${userResponse.statusText}`);
-        }
-
-        const userData = await userResponse.json();
-
-        const playlistDescription = `AI-generated playlist for ${mood} mood${language !== "any" ? ` in ${language}` : ""} based on your music preferences`;
-        const playlistResponse = await fetch(
-            `https://api.spotify.com/v1/users/${userData.id}/playlists`,
-            {
-                method: "POST",
-                headers,
-                body: JSON.stringify({
-                    name: playlistName || `${mood} Mood - AI Generated${language !== "any" ? ` (${language})` : ""}`,
-                    description: playlistDescription,
-                    public: true,
-                }),
-            }
+    for (const song of songSuggestions) {
+      try {
+        const exactSearchQuery = `track:"${song.title}" artist:"${song.artist}"`;
+        let searchResponse = await fetch(
+          `https://api.spotify.com/v1/search?q=${encodeURIComponent(
+            exactSearchQuery
+          )}&type=track&limit=5${marketParam}`,
+          { headers }
         );
 
-        if (!playlistResponse.ok) {
-            throw new Error(`Failed to create playlist: ${playlistResponse.statusText}`);
+        let foundExactMatch = false;
+        let foundTrack = null;
+
+        if (searchResponse.ok) {
+          const searchData = await searchResponse.json();
+          if (searchData.tracks.items.length > 0) {
+            foundTrack = searchData.tracks.items.find((track: any) =>
+              track.artists.some(
+                (artist: any) =>
+                  artist.name.toLowerCase() === song.artist.toLowerCase() ||
+                  artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
+                  song.artist.toLowerCase().includes(artist.name.toLowerCase())
+              )
+            );
+
+            if (foundTrack) {
+              foundExactMatch = true;
+              console.log(`Found exact match: ${foundTrack.artists[0].name} - ${foundTrack.name}`);
+            }
+          }
         }
 
-        const playlistData = await playlistResponse.json();
+        if (!foundExactMatch) {
+          const generalSearchQuery = `${song.title} ${song.artist}`;
+          searchResponse = await fetch(
+            `https://api.spotify.com/v1/search?q=${encodeURIComponent(
+              generalSearchQuery
+            )}&type=track&limit=10${marketParam}`,
+            { headers }
+          );
 
-        await addTracksToPlaylist(playlistData.id, trackUris);
+          if (searchResponse.ok) {
+            const searchData = await searchResponse.json();
+            if (searchData.tracks.items.length > 0) {
+              const sortedResults = searchData.tracks.items.sort((a: any, b: any) => {
+                const aTitle = a.name.toLowerCase();
+                const bTitle = b.name.toLowerCase();
+                const targetTitle = song.title.toLowerCase();
 
-        return {
-            playlist: playlistData,
-            tracks: trackUris.length,
-            suggestedSongs: songSuggestions
-        };
-    } catch (error) {
-        console.error("Error in generateMoodPlaylistWithAI:", error);
-        throw error;
+                const aArtistMatch = a.artists.some(
+                  (artist: any) =>
+                    artist.name.toLowerCase() === song.artist.toLowerCase() ||
+                    artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
+                    song.artist.toLowerCase().includes(artist.name.toLowerCase())
+                );
+
+                const bArtistMatch = b.artists.some(
+                  (artist: any) =>
+                    artist.name.toLowerCase() === song.artist.toLowerCase() ||
+                    artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
+                    song.artist.toLowerCase().includes(artist.name.toLowerCase())
+                );
+
+                if (aArtistMatch && !bArtistMatch) return -1;
+                if (!aArtistMatch && bArtistMatch) return 1;
+
+                const aTitleSimilarity =
+                  aTitle === targetTitle
+                    ? 2
+                    : aTitle.includes(targetTitle) || targetTitle.includes(aTitle)
+                    ? 1
+                    : 0;
+                const bTitleSimilarity =
+                  bTitle === targetTitle
+                    ? 2
+                    : bTitle.includes(targetTitle) || targetTitle.includes(bTitle)
+                    ? 1
+                    : 0;
+
+                return bTitleSimilarity - aTitleSimilarity;
+              });
+
+              foundTrack = sortedResults[0];
+              console.log(
+                `Found best match: ${foundTrack.artists[0].name} - ${foundTrack.name} (original request: ${song.artist} - ${song.title})`
+              );
+            }
+          }
+        }
+
+        if (foundTrack) {
+          trackUris.push(foundTrack.uri);
+        }
+      } catch (error) {
+        console.error(`Error searching for track: ${song.artist} - ${song.title}`, error);
+      }
     }
+
+    if (trackUris.length > 0) {
+      try {
+        const aiFoundTracks = trackUris.slice(0, 5);
+
+        console.log('Using search fallback for related tracks');
+        const searchTrack = await fetch(`https://api.spotify.com/v1/tracks/${aiFoundTracks[0]}`, {
+          headers,
+        });
+
+        if (searchTrack.ok) {
+          const trackData = await searchTrack.json();
+          const searchQuery = `${trackData.name} ${trackData.artists[0].name}`;
+
+          const searchResponse = await fetch(
+            `https://api.spotify.com/v1/search?q=${encodeURIComponent(
+              searchQuery
+            )}&type=track&limit=${Math.max(10, songCount - trackUris.length)}${marketParam}`,
+            { headers }
+          );
+
+          if (searchResponse.ok) {
+            const searchData = await searchResponse.json();
+            const relatedTrackUris = searchData.tracks.items
+              .filter((track: any) => !aiFoundTracks.includes(track.id))
+              .map((track: any) => track.uri);
+
+            for (const uri of relatedTrackUris) {
+              if (!trackUris.includes(uri)) {
+                trackUris.push(uri);
+              }
+            }
+
+            console.log(`Added ${relatedTrackUris.length} related tracks from search`);
+          }
+        }
+      } catch (error) {
+        console.error('Error getting related tracks:', error);
+      }
+    }
+
+    if (trackUris.length < 5) {
+      console.log('Not enough AI-suggested songs found. Searching for mood directly.');
+      const moodSearchResponse = await fetch(
+        `https://api.spotify.com/v1/search?q=${encodeURIComponent(mood)}&type=track&limit=${
+          songCount - trackUris.length
+        }${marketParam}`,
+        { headers }
+      );
+
+      if (moodSearchResponse.ok) {
+        const moodSearchData = await moodSearchResponse.json();
+        const moodTrackUris = moodSearchData.tracks.items.map((track: any) => track.uri);
+
+        for (const uri of moodTrackUris) {
+          if (!trackUris.includes(uri)) {
+            trackUris.push(uri);
+          }
+        }
+      }
+    }
+
+    if (trackUris.length === 0) {
+      throw new Error('Could not find any tracks for the requested mood');
+    }
+
+    const userResponse = await fetch('https://api.spotify.com/v1/me', { headers });
+    if (!userResponse.ok) {
+      throw new Error(`Failed to fetch user info: ${userResponse.statusText}`);
+    }
+
+    const userData = await userResponse.json();
+
+    const playlistDescription = `AI-generated playlist for ${mood} mood${
+      language !== 'any' ? ` in ${language}` : ''
+    } based on your music preferences`;
+    const playlistResponse = await fetch(
+      `https://api.spotify.com/v1/users/${userData.id}/playlists`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name:
+            playlistName ||
+            `${mood} Mood - AI Generated${language !== 'any' ? ` (${language})` : ''}`,
+          description: playlistDescription,
+          public: true,
+        }),
+      }
+    );
+
+    if (!playlistResponse.ok) {
+      throw new Error(`Failed to create playlist: ${playlistResponse.statusText}`);
+    }
+
+    const playlistData = await playlistResponse.json();
+
+    await addTracksToPlaylist(playlistData.id, trackUris);
+
+    return {
+      playlist: playlistData,
+      tracks: trackUris.length,
+      suggestedSongs: songSuggestions,
+    };
+  } catch (error) {
+    console.error('Error in generateMoodPlaylistWithAI:', error);
+    throw error;
+  }
 };
 
 export const generateCustomPromptPlaylist = async (
-    userPrompt: string,
-    playlistName: string,
-    songCount: number = 20,
-    language: string = "any"
+  userPrompt: string,
+  playlistName: string,
+  songCount: number = 20,
+  language: string = 'any'
 ) => {
-    const headers = await getSpotifyHeaders();
+  const headers = await getSpotifyHeaders();
 
-    try {
-        const market = getMarketFromLanguage(language);
-        console.log(`Using market code for ${language}: ${market || 'none (global)'}`);
+  try {
+    const market = getMarketFromLanguage(language);
+    console.log(`Using market code for ${language}: ${market || 'none (global)'}`);
 
-        // Use Mistral-7B model for better understanding of user prompts
-        const API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1";
-        const API_KEY = process.env.NEXT_PUBLIC_HUGGINGFACE_API_KEY;
+    const API_URL =
+      'https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1';
+    const API_KEY = process.env.NEXT_PUBLIC_HUGGINGFACE_API_KEY;
 
-        if (!API_KEY) {
-            throw new Error("HUGGINGFACE_API_KEY is not defined in environment variables");
-        }
+    if (!API_KEY) {
+      throw new Error('HUGGINGFACE_API_KEY is not defined in environment variables');
+    }
 
-        // Enhanced prompt for the AI
-        const systemPrompt = `You are a music expert. Analyze the following user request and suggest ${songCount} songs that match the description. 
-        Consider the following aspects from the user's prompt:
-        1. Genre preferences
-        2. Artist mentions
-        3. Mood or atmosphere
-        4. Specific song characteristics
-        5. Language preferences
-        6. Any number provided by the user like top 10, top 20, etc.
-        Format the response as a numbered list with each entry in the format: "Artist Name - Song Title".
-        Only include real, existing songs. Here's the list:\n1.`;
+    const systemPrompt = `You are a world-class music expert with deep knowledge spanning a multitude of genres, eras, and cultural influences. Carefully analyze the following user request in complete detail to deliver a personalized song recommendation list that exceeds the user's expectations.
+                            Consider the following guidelines:
+                            1. User Intent Analysis:
+                                - If the user explicitly states a specific artist and instructs to include only that artist's songs, provide tracks exclusively from that artist.
+                                - If the user mentions liking an artist's style (e.g., "I like Coldplay songs, give me similar"), suggest songs from similar artists that capture the same mood, style, and atmosphere.
+                            2. Comprehensive Song Criteria:
+                                - Genre and subgenre nuances, as well as relevant musical influences.
+                                - Mood, atmosphere, and tempo of the songs.
+                                - Specific song characteristics including instrumentation, lyrical themes, and stylistic elements.
+                                - Language preferences and cultural context.
+                                - Any numerical details provided (e.g., "top 10", "top 20").
+                            3. Curate a Unique Experience:
+                                - Blend familiar favorites with innovative, lesser-known tracks to create a diverse and engaging playlist.
+                                - Adapt your choices to both align with the user's explicit preferences and introduce novel musical discoveries.
+                            4. Response Formatting:
+                                - Format the final answer strictly as a numbered list.
+                                - Each entry should follow the format “Artist Name - Song Title” and must include only real, existing songs.
 
-        const fullPrompt = `${systemPrompt}\nUser Request: ${userPrompt}`;
+                            Leverage your deep analysis of the user request to curate a list that not only matches but enhances the user's musical preferences. Here is your list:\n1.`;
 
-        const huggingFaceResponse = await fetch(API_URL, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${API_KEY}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                inputs: fullPrompt,
-                parameters: {
-                    max_new_tokens: songCount * 50,
-                    temperature: 0.7,
-                    top_p: 0.9,
-                    repetition_penalty: 1.2,
-                    do_sample: true,
-                    top_k: 50
-                }
-            } as HuggingFaceTextGenRequest)
+    const fullPrompt = `${systemPrompt}\nUser Request: ${userPrompt}`;
+
+    const huggingFaceResponse = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        inputs: fullPrompt,
+        parameters: {
+          max_new_tokens: songCount * 50,
+          temperature: 0.7,
+          top_p: 0.9,
+          repetition_penalty: 1.2,
+          do_sample: true,
+          top_k: 50,
+        },
+      } as HuggingFaceTextGenRequest),
+    });
+
+    if (!huggingFaceResponse.ok) {
+      throw new Error(`Hugging Face API error: ${huggingFaceResponse.statusText}`);
+    }
+
+    const result = await huggingFaceResponse.json();
+    const generatedText = result[0]?.generated_text || '';
+
+    const songSuggestions: { artist: string; title: string }[] = [];
+    const songRegex = /^\d+\.\s+([^–—-]+)\s*[-–—]\s*([^–—-]+)$/gim;
+    let match;
+
+    while ((match = songRegex.exec(generatedText)) !== null && songSuggestions.length < songCount) {
+      if (match[1] && match[2]) {
+        songSuggestions.push({
+          artist: match[1].trim(),
+          title: match[2].trim(),
         });
+      }
+    }
 
-        if (!huggingFaceResponse.ok) {
-            throw new Error(`Hugging Face API error: ${huggingFaceResponse.statusText}`);
-        }
+    console.log(`AI suggested ${songSuggestions.length} songs based on user prompt`);
 
-        const result = await huggingFaceResponse.json();
-        const generatedText = result[0]?.generated_text || "";
+    const trackUris: string[] = [];
+    const marketParam = market ? `&market=${market}` : '';
 
-        // Parse the AI's response
-        const songSuggestions: { artist: string, title: string; }[] = [];
-        const songRegex = /^\d+\.\s+([^–—-]+)\s*[-–—]\s*([^–—-]+)$/gmi;
-        let match;
-
-        while ((match = songRegex.exec(generatedText)) !== null && songSuggestions.length < songCount) {
-            if (match[1] && match[2]) {
-                songSuggestions.push({
-                    artist: match[1].trim(),
-                    title: match[2].trim()
-                });
-            }
-        }
-
-        console.log(`AI suggested ${songSuggestions.length} songs based on user prompt`);
-
-        // Search for the suggested songs on Spotify
-        const trackUris: string[] = [];
-        const marketParam = market ? `&market=${market}` : "";
-
-        for (const song of songSuggestions) {
-            try {
-                // First try with exact artist search
-                const exactSearchQuery = `track:"${song.title}" artist:"${song.artist}"`;
-                let searchResponse = await fetch(
-                    `https://api.spotify.com/v1/search?q=${encodeURIComponent(exactSearchQuery)}&type=track&limit=5${marketParam}`,
-                    { headers }
-                );
-
-                let foundExactMatch = false;
-                let foundTrack = null;
-
-                if (searchResponse.ok) {
-                    const searchData = await searchResponse.json();
-                    if (searchData.tracks.items.length > 0) {
-                        // Try to find exact artist match
-                        foundTrack = searchData.tracks.items.find((track: any) =>
-                            track.artists.some((artist: any) =>
-                                artist.name.toLowerCase() === song.artist.toLowerCase() ||
-                                artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
-                                song.artist.toLowerCase().includes(artist.name.toLowerCase())
-                            )
-                        );
-
-                        if (foundTrack) {
-                            foundExactMatch = true;
-                            console.log(`Found exact match: ${foundTrack.artists[0].name} - ${foundTrack.name}`);
-                        }
-                    }
-                }
-
-                // If exact match not found, try with more general search
-                if (!foundExactMatch) {
-                    const generalSearchQuery = `${song.title} ${song.artist}`;
-                    searchResponse = await fetch(
-                        `https://api.spotify.com/v1/search?q=${encodeURIComponent(generalSearchQuery)}&type=track&limit=10${marketParam}`,
-                        { headers }
-                    );
-
-                    if (searchResponse.ok) {
-                        const searchData = await searchResponse.json();
-                        if (searchData.tracks.items.length > 0) {
-                            // Calculate similarity score for each result to find best match
-                            const sortedResults = searchData.tracks.items.sort((a: any, b: any) => {
-                                // Check if title matches
-                                const aTitle = a.name.toLowerCase();
-                                const bTitle = b.name.toLowerCase();
-                                const targetTitle = song.title.toLowerCase();
-
-                                // Check if artist matches
-                                const aArtistMatch = a.artists.some((artist: any) =>
-                                    artist.name.toLowerCase() === song.artist.toLowerCase() ||
-                                    artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
-                                    song.artist.toLowerCase().includes(artist.name.toLowerCase())
-                                );
-
-                                const bArtistMatch = b.artists.some((artist: any) =>
-                                    artist.name.toLowerCase() === song.artist.toLowerCase() ||
-                                    artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
-                                    song.artist.toLowerCase().includes(artist.name.toLowerCase())
-                                );
-
-                                // Prioritize artist match then title match
-                                if (aArtistMatch && !bArtistMatch) return -1;
-                                if (!aArtistMatch && bArtistMatch) return 1;
-
-                                // If both or neither match artist, compare title similarity
-                                const aTitleSimilarity = aTitle === targetTitle ? 2 :
-                                    (aTitle.includes(targetTitle) || targetTitle.includes(aTitle) ? 1 : 0);
-                                const bTitleSimilarity = bTitle === targetTitle ? 2 :
-                                    (bTitle.includes(targetTitle) || targetTitle.includes(bTitle) ? 1 : 0);
-
-                                return bTitleSimilarity - aTitleSimilarity;
-                            });
-
-                            foundTrack = sortedResults[0];
-                            console.log(`Found best match: ${foundTrack.artists[0].name} - ${foundTrack.name} (original request: ${song.artist} - ${song.title})`);
-                        }
-                    }
-                }
-
-                if (foundTrack) {
-                    trackUris.push(foundTrack.uri);
-                }
-            } catch (error) {
-                console.error(`Error searching for track: ${song.artist} - ${song.title}`, error);
-            }
-        }
-
-        // Create the playlist
-        const userResponse = await fetch("https://api.spotify.com/v1/me", { headers });
-        if (!userResponse.ok) {
-            throw new Error(`Failed to fetch user info: ${userResponse.statusText}`);
-        }
-
-        const userData = await userResponse.json();
-
-        const playlistDescription = `AI-generated playlist based on your custom request: "${userPrompt}"`;
-        const playlistResponse = await fetch(
-            `https://api.spotify.com/v1/users/${userData.id}/playlists`,
-            {
-                method: "POST",
-                headers,
-                body: JSON.stringify({
-                    name: playlistName || "Custom AI Playlist",
-                    description: playlistDescription,
-                    public: true,
-                }),
-            }
+    for (const song of songSuggestions) {
+      try {
+        const exactSearchQuery = `track:"${song.title}" artist:"${song.artist}"`;
+        let searchResponse = await fetch(
+          `https://api.spotify.com/v1/search?q=${encodeURIComponent(
+            exactSearchQuery
+          )}&type=track&limit=5${marketParam}`,
+          { headers }
         );
 
-        if (!playlistResponse.ok) {
-            throw new Error(`Failed to create playlist: ${playlistResponse.statusText}`);
+        let foundExactMatch = false;
+        let foundTrack = null;
+
+        if (searchResponse.ok) {
+          const searchData = await searchResponse.json();
+          if (searchData.tracks.items.length > 0) {
+            foundTrack = searchData.tracks.items.find((track: any) =>
+              track.artists.some(
+                (artist: any) =>
+                  artist.name.toLowerCase() === song.artist.toLowerCase() ||
+                  artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
+                  song.artist.toLowerCase().includes(artist.name.toLowerCase())
+              )
+            );
+
+            if (foundTrack) {
+              foundExactMatch = true;
+              console.log(`Found exact match: ${foundTrack.artists[0].name} - ${foundTrack.name}`);
+            }
+          }
         }
 
-        const playlistData = await playlistResponse.json();
+        if (!foundExactMatch) {
+          const generalSearchQuery = `${song.title} ${song.artist}`;
+          searchResponse = await fetch(
+            `https://api.spotify.com/v1/search?q=${encodeURIComponent(
+              generalSearchQuery
+            )}&type=track&limit=10${marketParam}`,
+            { headers }
+          );
 
-        await addTracksToPlaylist(playlistData.id, trackUris);
+          if (searchResponse.ok) {
+            const searchData = await searchResponse.json();
+            if (searchData.tracks.items.length > 0) {
+              const sortedResults = searchData.tracks.items.sort((a: any, b: any) => {
+                const aTitle = a.name.toLowerCase();
+                const bTitle = b.name.toLowerCase();
+                const targetTitle = song.title.toLowerCase();
 
-        return {
-            playlist: playlistData,
-            tracks: trackUris.length,
-            suggestedSongs: songSuggestions
-        };
-    } catch (error) {
-        console.error("Error in generateCustomPromptPlaylist:", error);
-        throw error;
+                const aArtistMatch = a.artists.some(
+                  (artist: any) =>
+                    artist.name.toLowerCase() === song.artist.toLowerCase() ||
+                    artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
+                    song.artist.toLowerCase().includes(artist.name.toLowerCase())
+                );
+
+                const bArtistMatch = b.artists.some(
+                  (artist: any) =>
+                    artist.name.toLowerCase() === song.artist.toLowerCase() ||
+                    artist.name.toLowerCase().includes(song.artist.toLowerCase()) ||
+                    song.artist.toLowerCase().includes(artist.name.toLowerCase())
+                );
+
+                if (aArtistMatch && !bArtistMatch) return -1;
+                if (!aArtistMatch && bArtistMatch) return 1;
+
+                const aTitleSimilarity =
+                  aTitle === targetTitle
+                    ? 2
+                    : aTitle.includes(targetTitle) || targetTitle.includes(aTitle)
+                    ? 1
+                    : 0;
+                const bTitleSimilarity =
+                  bTitle === targetTitle
+                    ? 2
+                    : bTitle.includes(targetTitle) || targetTitle.includes(bTitle)
+                    ? 1
+                    : 0;
+
+                return bTitleSimilarity - aTitleSimilarity;
+              });
+
+              foundTrack = sortedResults[0];
+              console.log(
+                `Found best match: ${foundTrack.artists[0].name} - ${foundTrack.name} (original request: ${song.artist} - ${song.title})`
+              );
+            }
+          }
+        }
+
+        if (foundTrack) {
+          trackUris.push(foundTrack.uri);
+        }
+      } catch (error) {
+        console.error(`Error searching for track: ${song.artist} - ${song.title}`, error);
+      }
     }
+
+    const userResponse = await fetch('https://api.spotify.com/v1/me', { headers });
+    if (!userResponse.ok) {
+      throw new Error(`Failed to fetch user info: ${userResponse.statusText}`);
+    }
+
+    const userData = await userResponse.json();
+
+    const playlistDescription = `AI-generated playlist based on your custom request: "${userPrompt}"`;
+    const playlistResponse = await fetch(
+      `https://api.spotify.com/v1/users/${userData.id}/playlists`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: playlistName || 'Custom AI Playlist',
+          description: playlistDescription,
+          public: true,
+        }),
+      }
+    );
+
+    if (!playlistResponse.ok) {
+      throw new Error(`Failed to create playlist: ${playlistResponse.statusText}`);
+    }
+
+    const playlistData = await playlistResponse.json();
+
+    await addTracksToPlaylist(playlistData.id, trackUris);
+
+    return {
+      playlist: playlistData,
+      tracks: trackUris.length,
+      suggestedSongs: songSuggestions,
+    };
+  } catch (error) {
+    console.error('Error in generateCustomPromptPlaylist:', error);
+    throw error;
+  }
 };
