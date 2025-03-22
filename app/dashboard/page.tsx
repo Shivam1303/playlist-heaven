@@ -359,9 +359,7 @@ export default function Dashboard() {
 
           const response = await fetch(`https://api.spotify.com/v1/playlists/${tempPlaylist.id}/followers`, {
             method: 'DELETE',
-            headers,
-            mode: 'cors',
-            credentials: 'include'
+            headers
           });
 
           if (!response.ok) {
